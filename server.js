@@ -11,6 +11,7 @@ import shopRoutes from './src/routes/shopRoutes.js';
 import templateRoutes from './src/routes/templateRoutes.js';
 import billRoutes from './src/routes/billRoutes.js';
 import customerRoutes from './src/routes/customerRoutes.js';
+import productRoutes from './src/routes/productRoutes.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 
 dotenv.config();
@@ -35,12 +36,16 @@ app.use('/api', limiter);
 app.use(compression());
 
 // CORS configuration
+const envOrigins = process.env.FRONTEND_URL 
+    ? process.env.FRONTEND_URL.split(',').map(url => url.trim()) 
+    : [];
+
 const allowedOrigins = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://localhost:5173',
     'http://127.0.0.1:5173',
-    process.env.FRONTEND_URL
+    ...envOrigins
 ].filter(Boolean);
 
 app.use(cors({
@@ -76,6 +81,7 @@ app.use('/api/shop', shopRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/bills', billRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/products', productRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

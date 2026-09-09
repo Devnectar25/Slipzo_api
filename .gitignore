@@ -4,3 +4,13 @@ node_modules/
 !.env.example
 .DS_Store
 *.log
+
+# SQLite Database files (generated dynamically at runtime)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.json
+*.db
+*.sqlite
+*.sqlite3
+

@@ -21,9 +21,22 @@ export const updateShop = async (req, res, next) => {
     const { name, address, phone, invoice_prefix, invoice_sequence, invoice_format } = req.body;
 
     if (!name || !name.trim()) {
-      return res.status(400).json({
-        detail: 'Shop name is required'
-      });
+      return res.status(400).json({ detail: 'Shop name is required' });
+    }
+
+    if (name.trim().length < 2 || name.trim().length > 100) {
+      return res.status(400).json({ detail: 'Shop name must be between 2 and 100 characters' });
+    }
+
+    if (phone && phone.trim()) {
+      const digitsOnly = phone.trim().replace(/[^0-9]/g, '');
+      if (digitsOnly.length < 7 || digitsOnly.length > 15) {
+        return res.status(400).json({ detail: 'Please enter a valid phone number (7-15 digits)' });
+      }
+    }
+
+    if (address && address.trim().length > 300) {
+      return res.status(400).json({ detail: 'Address cannot exceed 300 characters' });
     }
 
     const updates = {
@@ -33,11 +46,21 @@ export const updateShop = async (req, res, next) => {
     };
 
     if (invoice_prefix !== undefined) {
-      updates.invoice_prefix = String(invoice_prefix).trim().toUpperCase() || 'SLP';
+      const cleanPrefix = String(invoice_prefix).trim().toUpperCase();
+      if (invoice_format !== 'SEQ' && cleanPrefix && !/^[A-Za-z0-9]{1,8}$/.test(cleanPrefix)) {
+        return res.status(400).json({ detail: 'Invoice prefix must be 1-8 alphanumeric characters' });
+      }
+      updates.invoice_prefix = cleanPrefix || 'SLP';
     }
+
     if (invoice_sequence !== undefined) {
-      updates.invoice_sequence = Math.max(1, Number(invoice_sequence) || 1001);
+      const seqNum = Number(invoice_sequence);
+      if (isNaN(seqNum) || seqNum < 1) {
+        return res.status(400).json({ detail: 'Sequence number must be at least 1' });
+      }
+      updates.invoice_sequence = Math.floor(seqNum);
     }
+
     if (invoice_format !== undefined) {
       updates.invoice_format = String(invoice_format).trim() || 'PREFIX-DATE-SEQ';
     }
@@ -45,9 +68,7 @@ export const updateShop = async (req, res, next) => {
     const shop = await Shop.update(req.user.id, updates);
 
     if (!shop) {
-      return res.status(404).json({
-        detail: 'Shop not found'
-      });
+      return res.status(404).json({ detail: 'Shop not found' });
     }
 
     res.json(shop);
