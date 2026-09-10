@@ -1,4 +1,3 @@
-import sqlite3 from 'sqlite3';
 import pkg from 'pg';
 const { Pool } = pkg;
 import { createClient } from '@supabase/supabase-js';
@@ -34,20 +33,29 @@ if (DATABASE_URL && (DATABASE_URL.startsWith('postgres://') || DATABASE_URL.star
         ssl: { rejectUnauthorized: false }
     });
 } else {
-    const SQLITE_DB_PATH = process.env.DATABASE_PATH || path.join(DEFAULT_DATA_DIR, 'slipzo.db');
-    const DB_DIR = path.dirname(SQLITE_DB_PATH);
-    if (!fs.existsSync(DB_DIR)) {
-        fs.mkdirSync(DB_DIR, { recursive: true });
+    try {
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        const sqlite3 = require('sqlite3');
+        const SQLITE_DB_PATH = process.env.DATABASE_PATH || path.join(DEFAULT_DATA_DIR, 'slipzo.db');
+        const DB_DIR = path.dirname(SQLITE_DB_PATH);
+        if (!fs.existsSync(DB_DIR)) {
+            fs.mkdirSync(DB_DIR, { recursive: true });
+        }
+        const sqlite = sqlite3.verbose();
+        sqliteDb = new sqlite.Database(SQLITE_DB_PATH);
+        console.log('📁 Initializing SQLite 3 database at:', SQLITE_DB_PATH);
+    } catch (err) {
+        console.warn('⚠️ SQLite3 native module skipped (PostgreSQL / Serverless mode active):', err.message);
     }
-    const sqlite = sqlite3.verbose();
-    sqliteDb = new sqlite.Database(SQLITE_DB_PATH);
-    console.log('📁 Initializing SQLite 3 database at:', SQLITE_DB_PATH);
 }
 
 export const db = sqliteDb;
 
-// Async helper functions for SQLite3
+// Async helper functions for SQLite3 (delegates to pg query if in PostgreSQL mode)
 export const sqliteRun = (sql, params = []) => {
+    if (isPg) return query(sql, params);
+    if (!sqliteDb) return Promise.resolve({ lastID: null, changes: 0, affectedRows: 0 });
     return new Promise((resolve, reject) => {
         sqliteDb.run(sql, params, function(err) {
             if (err) return reject(err);
@@ -57,6 +65,8 @@ export const sqliteRun = (sql, params = []) => {
 };
 
 export const sqliteAll = (sql, params = []) => {
+    if (isPg) return query(sql, params);
+    if (!sqliteDb) return Promise.resolve([]);
     return new Promise((resolve, reject) => {
         sqliteDb.all(sql, params, (err, rows) => {
             if (err) return reject(err);
@@ -66,6 +76,8 @@ export const sqliteAll = (sql, params = []) => {
 };
 
 export const sqliteGet = (sql, params = []) => {
+    if (isPg) return queryOne(sql, params);
+    if (!sqliteDb) return Promise.resolve(null);
     return new Promise((resolve, reject) => {
         sqliteDb.get(sql, params, (err, row) => {
             if (err) return reject(err);

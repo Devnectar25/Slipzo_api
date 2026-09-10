@@ -1,4 +1,4 @@
-import { sqliteAll, sqliteGet, sqliteRun } from '../config/database.js';
+import { query, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
 
 class Product {
@@ -18,11 +18,11 @@ class Product {
         }
 
         sql += ` ORDER BY name ASC`;
-        return await sqliteAll(sql, params);
+        return await query(sql, params);
     }
 
     static async findByIdAndUser(id, userId) {
-        return await sqliteGet(`SELECT * FROM products WHERE id = ? AND user_id = ?`, [id, userId]);
+        return await queryOne(`SELECT * FROM products WHERE id = ? AND user_id = ?`, [id, userId]);
     }
 
     static async create(data) {
@@ -30,7 +30,7 @@ class Product {
         const { user_id, name, price = 0, category = 'General', sku = '', tax_rate = 0, stock = 100, description = '' } = data;
         const now = new Date().toISOString();
 
-        await sqliteRun(
+        await query(
             `INSERT INTO products (id, user_id, name, price, category, sku, tax_rate, stock, description, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [id, user_id, name.trim(), parseFloat(price) || 0, category.trim() || 'General', sku ? sku.trim() : null, parseFloat(tax_rate) || 0, parseInt(stock) || 100, description ? description.trim() : '', now, now]
@@ -52,7 +52,7 @@ class Product {
         const description = data.description !== undefined ? data.description.trim() : product.description;
         const now = new Date().toISOString();
 
-        await sqliteRun(
+        await query(
             `UPDATE products 
              SET name = ?, price = ?, category = ?, sku = ?, tax_rate = ?, stock = ?, description = ?, updated_at = ?
              WHERE id = ? AND user_id = ?`,
@@ -63,19 +63,19 @@ class Product {
     }
 
     static async delete(id, userId) {
-        const result = await sqliteRun(`DELETE FROM products WHERE id = ? AND user_id = ?`, [id, userId]);
-        return result.changes > 0;
+        const result = await query(`DELETE FROM products WHERE id = ? AND user_id = ?`, [id, userId]);
+        return (result?.affectedRows || result?.changes || 0) > 0;
     }
 
     static async getStats(userId) {
-        const total = await sqliteGet(`SELECT COUNT(*) as count FROM products WHERE user_id = ?`, [userId]);
-        const categories = await sqliteGet(`SELECT COUNT(DISTINCT category) as count FROM products WHERE user_id = ?`, [userId]);
-        const lowStock = await sqliteGet(`SELECT COUNT(*) as count FROM products WHERE user_id = ? AND stock < 10`, [userId]);
+        const total = await queryOne(`SELECT COUNT(*) as count FROM products WHERE user_id = ?`, [userId]);
+        const categories = await queryOne(`SELECT COUNT(DISTINCT category) as count FROM products WHERE user_id = ?`, [userId]);
+        const lowStock = await queryOne(`SELECT COUNT(*) as count FROM products WHERE user_id = ? AND stock < 10`, [userId]);
 
         return {
-            totalProducts: total?.count || 0,
-            totalCategories: categories?.count || 0,
-            lowStockProducts: lowStock?.count || 0
+            totalProducts: parseInt(total?.count || 0),
+            totalCategories: parseInt(categories?.count || 0),
+            lowStockProducts: parseInt(lowStock?.count || 0)
         };
     }
 }

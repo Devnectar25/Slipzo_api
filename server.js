@@ -93,11 +93,13 @@ app.get('/api/health', (req, res) => {
 // Error handler
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-    console.log(`🚀 Slipzo backend running on http://localhost:${PORT}`);
-    console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 API URL: http://localhost:${PORT}/api`);
-});
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Slipzo backend running on http://localhost:${PORT}`);
+        console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`🔗 API URL: http://localhost:${PORT}/api`);
+    });
+}
 
 // Handle unhandled rejections
 process.on('unhandledRejection', (err) => {
@@ -108,3 +110,5 @@ process.on('unhandledRejection', (err) => {
 process.on('uncaughtException', (err) => {
     console.error('❌ Uncaught exception:', err);
 });
+
+export default app;
