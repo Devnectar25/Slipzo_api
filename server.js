@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
-import { initDatabase } from './src/config/database.js';
+import { initDatabase, queryOne } from './src/config/database.js';
 import authRoutes from './src/routes/authRoutes.js';
 import shopRoutes from './src/routes/shopRoutes.js';
 import templateRoutes from './src/routes/templateRoutes.js';
@@ -107,8 +107,23 @@ app.get('/api', (req, res) => {
     });
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+    try {
+        const dbResult = await queryOne('SELECT COUNT(*) as count FROM users');
+        res.json({
+            status: 'healthy',
+            database: 'connected (Supabase PostgreSQL)',
+            totalUsers: parseInt(dbResult?.count || 0),
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: 'degraded',
+            database: 'disconnected',
+            error: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // Error handler
