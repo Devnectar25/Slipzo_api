@@ -85,7 +85,24 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/contact', contactRoutes);
 
-// Health check
+// Root & Health check endpoints
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Slipzo API Server',
+        status: 'online',
+        version: '1.0.0',
+        health: '/api/health'
+    });
+});
+
+app.get('/api', (req, res) => {
+    res.json({
+        name: 'Slipzo API',
+        status: 'healthy',
+        timestamp: new Date().toISOString()
+    });
+});
+
 app.get('/api/health', (req, res) => {
     res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
