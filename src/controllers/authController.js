@@ -75,14 +75,15 @@ export const register = async (req, res, next) => {
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         
+        const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
         res.cookie('token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
+            secure: isProd,
+            sameSite: isProd ? 'none' : 'lax',
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
-        const userData = user.toJSON();
+        const userData = { ...user.toJSON(), token };
         console.log('✅ Registration complete, returning user data');
         res.status(201).json(userData);
     } catch (err) {
@@ -122,15 +123,16 @@ export const login = async (req, res, next) => {
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         
+        const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
         res.cookie('token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
+            secure: isProd,
+            sameSite: isProd ? 'none' : 'lax',
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
         console.log('✅ Login successful for:', email);
-        res.json(user.toJSON());
+        res.json({ ...user.toJSON(), token });
     } catch (err) {
         console.error('❌ Login error:', err);
         next(err);

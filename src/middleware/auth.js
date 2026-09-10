@@ -2,7 +2,11 @@ import User from '../models/User.js';
 import { verifyToken } from '../utils/helpers.js';
 
 export const authMiddleware = async (req, res, next) => {
-    const token = req.cookies?.token;
+    let token = req.cookies?.token;
+    if (!token && req.headers.authorization) {
+        const authHeader = req.headers.authorization;
+        token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+    }
     
     if (!token) {
         return res.status(401).json({ detail: 'Authentication required' });
@@ -23,7 +27,11 @@ export const authMiddleware = async (req, res, next) => {
 };
 
 export const optionalAuth = async (req, res, next) => {
-    const token = req.cookies?.token;
+    let token = req.cookies?.token;
+    if (!token && req.headers.authorization) {
+        const authHeader = req.headers.authorization;
+        token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+    }
     if (token) {
         try {
             const decoded = verifyToken(token);
