@@ -21,3 +21,17 @@ export const authMiddleware = async (req, res, next) => {
     req.user = user;
     next();
 };
+
+export const optionalAuth = async (req, res, next) => {
+    const token = req.cookies?.token;
+    if (token) {
+        try {
+            const decoded = verifyToken(token);
+            if (decoded) {
+                const user = await User.findById(decoded.userId);
+                if (user) req.user = user;
+            }
+        } catch (_) {}
+    }
+    next();
+};

@@ -12,6 +12,7 @@ import templateRoutes from './src/routes/templateRoutes.js';
 import billRoutes from './src/routes/billRoutes.js';
 import customerRoutes from './src/routes/customerRoutes.js';
 import productRoutes from './src/routes/productRoutes.js';
+import contactRoutes from './src/routes/contactRoutes.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 
 dotenv.config();
@@ -82,6 +83,7 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/bills', billRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/contact', contactRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

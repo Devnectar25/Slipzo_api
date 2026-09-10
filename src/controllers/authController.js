@@ -62,18 +62,14 @@ export const register = async (req, res, next) => {
             // Continue even if shop creation fails - user still exists
         }
 
-        // Create default template
+        // Seed all UI receipt templates into database for new user
         try {
-            await Template.create({
-                user_id: user.id,
-                name: 'Standard Receipt',
-                is_default: true
-            });
-            console.log('✅ Default template created');
+            await Template.seedDefaultTemplates(user.id);
+            console.log('✅ UI Templates seeded into database');
         } catch (templateError) {
-            console.error('❌ Template creation error:', templateError);
-            // Continue even if template creation fails - user still exists
+            console.error('❌ Template seeding error:', templateError);
         }
+
 
         // Generate token
         const token = generateToken(user.id);

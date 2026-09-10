@@ -18,7 +18,7 @@ export const getShop = async (req, res, next) => {
 
 export const updateShop = async (req, res, next) => {
   try {
-    const { name, address, phone, invoice_prefix, invoice_sequence, invoice_format } = req.body;
+    const { name, address, phone, gstin, show_tax, tax_rate, invoice_prefix, invoice_sequence, invoice_format } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ detail: 'Shop name is required' });
@@ -42,7 +42,10 @@ export const updateShop = async (req, res, next) => {
     const updates = {
       name: name.trim(),
       address: address?.trim() || '',
-      phone: phone?.trim() || ''
+      phone: phone?.trim() || '',
+      gstin: gstin ? String(gstin).trim().toUpperCase() : '',
+      show_tax: show_tax !== undefined ? Number(show_tax) : 1,
+      tax_rate: tax_rate !== undefined ? Number(tax_rate) : 18.00
     };
 
     if (invoice_prefix !== undefined) {

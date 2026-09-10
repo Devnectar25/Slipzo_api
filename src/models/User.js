@@ -5,9 +5,11 @@ import { query, queryOne, insert } from '../config/database.js';
 class User {
     constructor(data) {
         this.id = data.id;
+        this.username = data.username || data.name;
+        this.name = data.name;
         this.email = data.email;
         this.password = data.password;
-        this.name = data.name;
+        this.shop = data.shop || null;
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
@@ -29,11 +31,13 @@ class User {
             console.log('✅ Password hashed successfully');
             
             const userId = uuidv4();
+            const username = (userData.username || userData.name).trim();
             const user = {
                 id: userId,
+                username: username,
+                name: userData.name.trim(),
                 email: userData.email.toLowerCase().trim(),
-                password: hashedPassword,
-                name: userData.name.trim()
+                password: hashedPassword
             };
 
             console.log('📝 Inserting user into database...');
@@ -73,7 +77,8 @@ class User {
         try {
             const data = await queryOne('SELECT * FROM users WHERE id = ?', [id]);
             if (data) {
-                return new User(data);
+                const shop = await queryOne('SELECT * FROM shops WHERE user_id = ?', [id]);
+                return new User({ ...data, shop });
             }
             return null;
         } catch (error) {
@@ -85,8 +90,6 @@ class User {
     static async validatePassword(user, password) {
         try {
             console.log('🔐 Validating password for user:', user.email);
-            console.log('🔐 Password provided length:', password.length);
-            console.log('🔐 Stored hash length:', user.password.length);
             
             const isValid = await bcrypt.compare(password, user.password);
             console.log('🔐 Password validation result:', isValid);
@@ -104,4 +107,4 @@ class User {
     }
 }
 
-export default User;
+export default User;
