@@ -8,6 +8,9 @@ export default class Shop {
         this.name = data.name;
         this.address = data.address || '';
         this.phone = data.phone || '';
+        this.gstin = data.gstin || '';
+        this.show_tax = data.show_tax !== undefined ? Number(data.show_tax) : 1;
+        this.tax_rate = Number(data.tax_rate !== undefined ? data.tax_rate : 18.00);
         this.invoice_prefix = data.invoice_prefix || 'SLP';
         this.invoice_sequence = Number(data.invoice_sequence || 1001);
         this.invoice_format = data.invoice_format || 'PREFIX-DATE-SEQ';
