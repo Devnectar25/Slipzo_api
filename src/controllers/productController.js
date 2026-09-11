@@ -36,7 +36,7 @@ export const getProduct = async (req, res, next) => {
 
 export const createProduct = async (req, res, next) => {
     try {
-        const { name, price, category, sku, tax_rate, stock, description } = req.body;
+        const { name, price, category, sku, tax_rate, stock, image, description } = req.body;
 
         if (!name || !name.trim()) {
             return res.status(400).json({ detail: 'Product name is required' });
@@ -50,6 +50,7 @@ export const createProduct = async (req, res, next) => {
             sku,
             tax_rate,
             stock,
+            image,
             description
         });
 
