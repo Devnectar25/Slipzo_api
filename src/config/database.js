@@ -286,11 +286,14 @@ export const initDatabase = async () => {
                     sku TEXT,
                     tax_rate NUMERIC(5,2) DEFAULT 0.00,
                     stock INTEGER DEFAULT 100,
+                    image TEXT,
                     description TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
+
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS image TEXT;
 
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
@@ -438,12 +441,15 @@ export const initDatabase = async () => {
                     sku TEXT,
                     tax_rate REAL DEFAULT 0.00,
                     stock INTEGER DEFAULT 100,
+                    image TEXT,
                     description TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             `);
+
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) {}
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS sessions (
