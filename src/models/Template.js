@@ -137,17 +137,12 @@ export default class Template {
     }
 
     static async seedDefaultTemplates(userId) {
-        for (const t of BUILTIN_TEMPLATES_DEFS) {
-            const check = await queryOne(
-                'SELECT id FROM templates WHERE user_id = ? AND name = ?',
-                [userId, t.name]
-            );
-            if (!check) {
-                await Template.create({
-                    user_id: userId,
-                    ...t
-                });
-            }
+        const existing = await query('SELECT name FROM templates WHERE user_id = ?', [userId]);
+        const existingNames = new Set((existing || []).map(e => e.name));
+        
+        const toInsert = BUILTIN_TEMPLATES_DEFS.filter(t => !existingNames.has(t.name));
+        if (toInsert.length > 0) {
+            await Promise.all(toInsert.map(t => Template.create({ user_id: userId, ...t })));
         }
         return await Template.findByUserId(userId);
     }
