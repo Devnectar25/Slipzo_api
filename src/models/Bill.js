@@ -156,8 +156,18 @@ export default class Bill {
                 queryParams
             );
 
-            for (const bill of bills) {
-                bill.items = await query('SELECT * FROM bill_items WHERE bill_id = ?', [bill.id]);
+            if (bills.length > 0) {
+                const billIds = bills.map(b => b.id);
+                const placeholders = billIds.map(() => '?').join(',');
+                const allItems = await query(`SELECT * FROM bill_items WHERE bill_id IN (${placeholders})`, billIds);
+                const itemsByBillId = {};
+                for (const item of (allItems || [])) {
+                    if (!itemsByBillId[item.bill_id]) itemsByBillId[item.bill_id] = [];
+                    itemsByBillId[item.bill_id].push(item);
+                }
+                for (const bill of bills) {
+                    bill.items = itemsByBillId[bill.id] || [];
+                }
             }
 
             return {
@@ -171,22 +181,32 @@ export default class Bill {
 
         // Default: return all bills array
         const bills = await query(`SELECT * ${baseSql} ORDER BY created_at DESC`, params);
-        for (const bill of bills) {
-            bill.items = await query('SELECT * FROM bill_items WHERE bill_id = ?', [bill.id]);
+        if (bills.length > 0) {
+            const billIds = bills.map(b => b.id);
+            const placeholders = billIds.map(() => '?').join(',');
+            const allItems = await query(`SELECT * FROM bill_items WHERE bill_id IN (${placeholders})`, billIds);
+            const itemsByBillId = {};
+            for (const item of (allItems || [])) {
+                if (!itemsByBillId[item.bill_id]) itemsByBillId[item.bill_id] = [];
+                itemsByBillId[item.bill_id].push(item);
+            }
+            for (const bill of bills) {
+                bill.items = itemsByBillId[bill.id] || [];
+            }
         }
         return bills.map(b => new Bill(b));
     }
 
     static async getTodaySales(userId) {
-        const today = new Date().toISOString().split('T')[0];
-        const bills = await query(
-            `SELECT * FROM bills WHERE user_id = ? AND DATE(created_at) = ?`,
-            [userId, today]
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const res = await queryOne(
+            `SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total FROM bills WHERE user_id = ? AND created_at >= ?`,
+            [userId, todayStart.toISOString()]
         );
-        
         return {
-            count: bills.length,
-            total: bills.reduce((sum, b) => sum + Number(b.total), 0)
+            count: Number(res?.count || 0),
+            total: Number(res?.total || 0)
         };
     }
 }

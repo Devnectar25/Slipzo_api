@@ -124,9 +124,22 @@ function formatDbError(err) {
 }
 
 // Initialize database schema
+let isDbInitialized = false;
+
 export const initDatabase = async () => {
+    if (isDbInitialized) return;
     try {
         if (isPg) {
+            // Fast check: if tables already exist, skip heavy DDL to prevent locking PostgreSQL catalogs
+            try {
+                const check = await pgPool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1;");
+                if (check.rows && check.rows.length > 0) {
+                    console.log('✅ PostgreSQL database tables already verified, skipping heavy DDL.');
+                    isDbInitialized = true;
+                    return;
+                }
+            } catch (_) {}
+
             await pgPool.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
@@ -468,6 +481,7 @@ export const initDatabase = async () => {
 
             console.log('✅ SQLite 3 Database initialized successfully!');
         }
+        isDbInitialized = true;
     } catch (err) {
         console.error('❌ Failed to initialize database:', err.message);
         throw err;
