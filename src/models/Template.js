@@ -98,7 +98,7 @@ export default class Template {
     constructor(data) {
         this.id = data.id || uuidv4();
         this.user_id = data.user_id;
-        this.name = data.name;
+        this.name = data.name || 'Default Receipt';
         this.category = data.category || 'Standard';
         this.badge = data.badge || '';
         this.width = data.width || '58mm';
@@ -108,11 +108,23 @@ export default class Template {
         this.description = data.description || '';
         this.gradient = data.gradient || '';
         this.accent_color = data.accent_color || '';
-        this.features = typeof data.features === 'string' ? (data.features.startsWith('[') ? JSON.parse(data.features) : data.features) : (data.features || []);
+        
+        try {
+            if (typeof data.features === 'string') {
+                this.features = data.features.startsWith('[') ? JSON.parse(data.features) : [data.features];
+            } else if (Array.isArray(data.features)) {
+                this.features = data.features;
+            } else {
+                this.features = [];
+            }
+        } catch (_) {
+            this.features = [];
+        }
+
         this.is_builtin = Boolean(data.is_builtin);
         this.is_default = Boolean(data.is_default);
-        this.created_at = data.created_at;
-        this.updated_at = data.updated_at;
+        this.created_at = data.created_at || new Date().toISOString();
+        this.updated_at = data.updated_at || new Date().toISOString();
     }
 
     static async create(templateData) {
@@ -128,8 +140,8 @@ export default class Template {
         }
 
         // If setting as default, unset other defaults
-        if (template.is_default) {
-            await query('UPDATE templates SET is_default = FALSE WHERE user_id = ?', [template.user_id]);
+        if (template.is_default && template.user_id) {
+            await query('UPDATE templates SET is_default = 0 WHERE user_id = ?', [template.user_id]).catch(() => {});
         }
 
         await insert('templates', template);
@@ -137,41 +149,77 @@ export default class Template {
     }
 
     static async seedDefaultTemplates(userId) {
-        const existing = await query('SELECT name FROM templates WHERE user_id = ?', [userId]);
-        const existingNames = new Set((existing || []).map(e => e.name));
-        
-        const toInsert = BUILTIN_TEMPLATES_DEFS.filter(t => !existingNames.has(t.name));
-        if (toInsert.length > 0) {
-            await Promise.all(toInsert.map(t => Template.create({ user_id: userId, ...t })));
+        try {
+            const existing = await query('SELECT name FROM templates WHERE user_id = ?', [userId]).catch(() => []);
+            const existingNames = new Set((existing || []).map(e => e.name));
+            
+            const toInsert = BUILTIN_TEMPLATES_DEFS.filter(t => !existingNames.has(t.name));
+            if (toInsert.length > 0) {
+                for (const t of toInsert) {
+                    await Template.create({ user_id: userId, ...t }).catch(() => null);
+                }
+            }
+
+            const rows = await query(
+                'SELECT * FROM templates WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
+                [userId]
+            ).catch(() => []);
+
+            if (rows && rows.length > 0) {
+                return rows.map(r => new Template(r));
+            }
+        } catch (err) {
+            console.error('⚠️ Template seeding warning:', err.message);
         }
-        return await Template.findByUserId(userId);
+
+        // Fallback: Return built-in default templates for user
+        return BUILTIN_TEMPLATES_DEFS.map(t => new Template({ ...t, user_id: userId }));
     }
 
     static async findByUserId(userId) {
-        let templates = await query(
-            'SELECT * FROM templates WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
-            [userId]
-        );
+        try {
+            let templates = await query(
+                'SELECT * FROM templates WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
+                [userId]
+            ).catch(() => []);
 
-        if (!templates || templates.length === 0) {
-            templates = await Template.seedDefaultTemplates(userId);
-            return templates;
+            if (!templates || templates.length === 0) {
+                return await Template.seedDefaultTemplates(userId);
+            }
+
+            return templates.map(t => new Template(t));
+        } catch (err) {
+            console.error('⚠️ Error in Template.findByUserId:', err);
+            return BUILTIN_TEMPLATES_DEFS.map(t => new Template({ ...t, user_id: userId }));
         }
-
-        return templates.map(t => new Template(t));
     }
 
     static async findById(id) {
-        const data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]);
+        const data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]).catch(() => null);
         return data ? new Template(data) : null;
     }
 
     static async findByIdAndUser(id, userId) {
-        const data = await queryOne(
-            'SELECT * FROM templates WHERE id = ? AND user_id = ?',
-            [id, userId]
-        );
-        return data ? new Template(data) : null;
+        if (!id) {
+            const userTemplates = await Template.findByUserId(userId);
+            return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
+        }
+
+        // 1. Direct lookup by ID and user_id
+        let data = await queryOne('SELECT * FROM templates WHERE id = ? AND user_id = ?', [id, userId]).catch(() => null);
+        if (data) return new Template(data);
+
+        // 2. Direct lookup by ID globally
+        data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]).catch(() => null);
+        if (data) return new Template(data);
+
+        // 3. Lookup by template name or category
+        data = await queryOne('SELECT * FROM templates WHERE (LOWER(name) = ? OR LOWER(category) = ?) AND user_id = ?', [id.toLowerCase(), id.toLowerCase(), userId]).catch(() => null);
+        if (data) return new Template(data);
+
+        // 4. Fallback to user's first available template or default
+        const userTemplates = await Template.findByUserId(userId);
+        return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
     }
 
     static async deleteById(id, userId) {

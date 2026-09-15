@@ -132,13 +132,30 @@ export const initDatabase = async () => {
         if (isPg) {
             // Fast check: if tables already exist, skip heavy DDL to prevent locking PostgreSQL catalogs
             try {
-                const check = await pgPool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1;");
-                if (check.rows && check.rows.length > 0) {
-                    console.log('✅ PostgreSQL database tables already verified, skipping heavy DDL.');
-                    isDbInitialized = true;
-                    return;
-                }
-            } catch (_) {}
+                await pgPool.query(`
+                    CREATE TABLE IF NOT EXISTS subscriptions (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        user_name TEXT,
+                        user_email TEXT,
+                        plan_name TEXT,
+                        amount NUMERIC(10,2) DEFAULT 0.00,
+                        prints_count INTEGER DEFAULT 0,
+                        payment_id TEXT,
+                        payment_status TEXT DEFAULT 'completed',
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_name TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_email TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_name TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0.00;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS prints_count INTEGER DEFAULT 0;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_id TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'completed';
+                `);
+            } catch (err) {
+                console.warn('⚠️ Subscriptions table migration check:', err.message);
+            }
 
             await pgPool.query(`
                 CREATE TABLE IF NOT EXISTS users (
@@ -315,6 +332,27 @@ export const initDatabase = async () => {
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    user_name TEXT,
+                    user_email TEXT,
+                    plan_name TEXT,
+                    amount NUMERIC(10,2) DEFAULT 0.00,
+                    prints_count INTEGER DEFAULT 0,
+                    payment_id TEXT,
+                    payment_status TEXT DEFAULT 'completed',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_name TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_email TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_name TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0.00;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS prints_count INTEGER DEFAULT 0;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_id TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'completed';
+
                 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 CREATE INDEX IF NOT EXISTS idx_customers_user_id ON customers(user_id);
                 CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
@@ -324,6 +362,7 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
                 CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email);
+                CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
             `);
             console.log('✅ Supabase PostgreSQL Database initialized successfully!');
         } else {
@@ -475,6 +514,22 @@ export const initDatabase = async () => {
                 )
             `);
 
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    user_name TEXT,
+                    user_email TEXT NOT NULL,
+                    plan_name TEXT NOT NULL,
+                    amount NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    prints_count INTEGER NOT NULL DEFAULT 0,
+                    payment_id TEXT,
+                    payment_status TEXT DEFAULT 'completed',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_customers_user_id ON customers(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)`);
@@ -484,6 +539,7 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
 
             console.log('✅ SQLite 3 Database initialized successfully!');
         }

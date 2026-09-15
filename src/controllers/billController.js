@@ -1,10 +1,11 @@
 import Bill from '../models/Bill.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
+import Subscription from '../models/Subscription.js';
 
 export const getBills = async (req, res, next) => {
     try {
-        const { page, limit, search, payment_mode } = req.query;
+        const { page, limit, search, payment_mode, days_limit } = req.query;
         const options = {};
         if (page !== undefined && limit !== undefined) {
             options.page = page;
@@ -12,6 +13,7 @@ export const getBills = async (req, res, next) => {
         }
         if (search) options.search = search;
         if (payment_mode) options.payment_mode = payment_mode;
+        if (days_limit) options.daysLimit = days_limit;
 
         const result = await Bill.findByUserId(req.user.id, options);
         res.json(result);
@@ -33,6 +35,14 @@ export const createBill = async (req, res, next) => {
             customer_phone,
             number
         } = req.body;
+        
+        // Validate user print quota before creating bill
+        const currentQuota = await Subscription.getQuotaByUserId(req.user.id);
+        if (currentQuota.printsRemaining <= 0) {
+            return res.status(403).json({ 
+                detail: 'Print quota limit reached. You have 0 prints remaining. Please purchase a plan to create more bills.' 
+            });
+        }
         
         // Validate items with proper checks
         if (!items || !items.length) {
@@ -97,9 +107,19 @@ export const createBill = async (req, res, next) => {
             template_width: template.width || '58mm',
             shop
         });
+
+        // Fetch updated quota after successful bill insertion
+        const updatedQuota = await Subscription.getQuotaByUserId(req.user.id);
         
-        res.status(201).json(bill);
+        // Return bill object augmented with updated quota
+        const responseData = typeof bill.toJSON === 'function' ? bill.toJSON() : { ...bill };
+        responseData.quota = updatedQuota;
+        
+        res.status(201).json(responseData);
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ detail: err.message });
+        }
         next(err);
     }
 };
