@@ -1,9 +1,12 @@
-import Template from '../models/Template.js';
+import Template, { BUILTIN_TEMPLATES_DEFS } from '../models/Template.js';
 
 export const getTemplates = async (req, res, next) => {
   try {
-    const templates = await Template.findByUserId(req.user.id);
-    res.json(templates);
+    if (req.user && req.user.id) {
+      const templates = await Template.findByUserId(req.user.id);
+      return res.json(templates);
+    }
+    return res.json(BUILTIN_TEMPLATES_DEFS);
   } catch (err) {
     next(err);
   }

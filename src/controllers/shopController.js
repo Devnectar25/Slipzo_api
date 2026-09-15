@@ -68,6 +68,15 @@ export const updateShop = async (req, res, next) => {
       updates.invoice_format = String(invoice_format).trim() || 'PREFIX-DATE-SEQ';
     }
 
+    if (req.body.default_template_id !== undefined) {
+      updates.default_template_id = String(req.body.default_template_id).trim();
+    }
+
+    if (req.body.default_discount !== undefined) {
+      const disc = parseFloat(req.body.default_discount);
+      updates.default_discount = isNaN(disc) || disc < 0 ? 0 : disc;
+    }
+
     const shop = await Shop.update(req.user.id, updates);
 
     if (!shop) {

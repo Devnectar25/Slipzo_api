@@ -72,20 +72,64 @@ export const createBill = async (req, res, next) => {
             return { name, quantity, rate };
         });
         
-        // Get shop
-        const shop = await Shop.findByUserId(req.user.id);
+        // Get shop: auto-create default if not found
+        let shop = await Shop.findByUserId(req.user.id);
         if (!shop) {
-            return res.status(400).json({ 
-                detail: 'Shop profile not found. Please set up your shop first.' 
+            shop = await Shop.create({
+                user_id: req.user.id,
+                name: `${req.user.name || 'My'} Shop`,
+                phone: '',
+                address: ''
             });
         }
         
-        // Get template
-        const template = await Template.findByIdAndUser(template_id, req.user.id);
+        // Get template: try exact ID match, name/alias match, or default fallback
+        let template = null;
+        if (template_id) {
+            template = await Template.findByIdAndUser(template_id, req.user.id);
+            if (!template) {
+                template = await Template.findById(template_id);
+            }
+        }
+        
         if (!template) {
-            return res.status(400).json({ 
-                detail: 'Invalid template' 
-            });
+            const userTemplates = await Template.findByUserId(req.user.id);
+            if (Array.isArray(userTemplates) && userTemplates.length > 0) {
+                const targetStr = String(template_id || shop.default_template_id || '').trim().toLowerCase();
+                
+                const aliasMap = {
+                    'classic': ['classic receipt', 'classic'],
+                    '1': ['classic receipt', 'classic'],
+                    'minimal': ['minimal clean bill', 'minimal'],
+                    '2': ['minimal clean bill', 'minimal'],
+                    'pro': ['shop pro', 'pro'],
+                    '3': ['shop pro', 'pro'],
+                    'eco': ['eco print', 'eco'],
+                    '4': ['eco print', 'eco'],
+                    'modern': ['modern shop', 'modern'],
+                    '5': ['modern shop', 'modern'],
+                    'elite': ['business elite', 'elite'],
+                    '6': ['business elite', 'elite']
+                };
+                const aliases = aliasMap[targetStr] || [];
+
+                template = userTemplates.find((t) => {
+                    const tId = String(t.id || '').toLowerCase();
+                    const tName = String(t.name || '').toLowerCase();
+                    if (tId === targetStr || tName === targetStr) return true;
+                    if (aliases.some(a => tName.includes(a) || tId === a)) return true;
+                    return false;
+                }) || userTemplates.find(t => t.is_default) || userTemplates[0];
+            }
+        }
+
+        if (!template) {
+            // Ultimate fallback to default builtin template definition
+            template = {
+                id: template_id || 'default-1',
+                name: 'Classic Receipt',
+                width: '58mm'
+            };
         }
         
         // Create bill with transaction
@@ -138,4 +182,19 @@ export const getBill = async (req, res) => {
 export const getBillStats = async (req, res) => {
     const stats = await Bill.getTodaySales(req.user.id);
     res.json(stats);
+};
+
+export const deleteBill = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const deleted = await Bill.delete(id, req.user.id);
+        
+        if (!deleted) {
+            return res.status(404).json({ detail: 'Bill not found or unauthorized' });
+        }
+        
+        res.json({ message: 'Bill deleted successfully', id });
+    } catch (err) {
+        next(err);
+    }
 };

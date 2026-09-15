@@ -3,6 +3,8 @@ import { query, queryOne, insert, deleteById } from '../config/database.js';
 
 export const BUILTIN_TEMPLATES_DEFS = [
   {
+    id: "classic",
+    templateId: "1",
     name: "Classic Receipt",
     category: "Standard",
     badge: "Standard",
@@ -18,6 +20,8 @@ export const BUILTIN_TEMPLATES_DEFS = [
     is_default: 1
   },
   {
+    id: "minimal",
+    templateId: "2",
     name: "Minimal Clean Bill",
     category: "Minimal",
     badge: "Most Popular",
@@ -33,6 +37,8 @@ export const BUILTIN_TEMPLATES_DEFS = [
     is_default: 0
   },
   {
+    id: "pro",
+    templateId: "3",
     name: "Shop Pro",
     category: "Business",
     badge: "Retail Choice",
@@ -48,6 +54,8 @@ export const BUILTIN_TEMPLATES_DEFS = [
     is_default: 0
   },
   {
+    id: "eco",
+    templateId: "4",
     name: "Eco Print",
     category: "Thermal",
     badge: "Paper Saver",
@@ -63,6 +71,8 @@ export const BUILTIN_TEMPLATES_DEFS = [
     is_default: 0
   },
   {
+    id: "modern",
+    templateId: "5",
     name: "Modern Shop",
     category: "Modern",
     badge: "Trendy",
@@ -78,6 +88,8 @@ export const BUILTIN_TEMPLATES_DEFS = [
     is_default: 0
   },
   {
+    id: "elite",
+    templateId: "6",
     name: "Business Elite",
     category: "Business",
     badge: "Premium",
@@ -97,6 +109,7 @@ export const BUILTIN_TEMPLATES_DEFS = [
 export default class Template {
     constructor(data) {
         this.id = data.id || uuidv4();
+        this.templateId = data.templateId || data.id;
         this.user_id = data.user_id;
         this.name = data.name || 'Default Receipt';
         this.category = data.category || 'Standard';
@@ -195,7 +208,27 @@ export default class Template {
     }
 
     static async findById(id) {
-        const data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]).catch(() => null);
+        let data = await queryOne('SELECT * FROM templates WHERE id = ? OR name = ?', [id, id]).catch(() => null);
+        if (!data) {
+            const keyNameMap = {
+                'classic': 'Classic Receipt',
+                '1': 'Classic Receipt',
+                'minimal': 'Minimal Clean Bill',
+                '2': 'Minimal Clean Bill',
+                'pro': 'Shop Pro',
+                '3': 'Shop Pro',
+                'eco': 'Eco Print',
+                '4': 'Eco Print',
+                'modern': 'Modern Shop',
+                '5': 'Modern Shop',
+                'elite': 'Business Elite',
+                '6': 'Business Elite'
+            };
+            const mappedName = keyNameMap[String(id).toLowerCase()];
+            if (mappedName) {
+                data = await queryOne('SELECT * FROM templates WHERE name = ?', [mappedName]).catch(() => null);
+            }
+        }
         return data ? new Template(data) : null;
     }
 
@@ -205,19 +238,38 @@ export default class Template {
             return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
         }
 
-        // 1. Direct lookup by ID and user_id
-        let data = await queryOne('SELECT * FROM templates WHERE id = ? AND user_id = ?', [id, userId]).catch(() => null);
+        let data = await queryOne(
+            'SELECT * FROM templates WHERE (id = ? OR name = ?) AND user_id = ?',
+            [id, id, userId]
+        ).catch(() => null);
         if (data) return new Template(data);
 
-        // 2. Direct lookup by ID globally
         data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]).catch(() => null);
         if (data) return new Template(data);
 
-        // 3. Lookup by template name or category
-        data = await queryOne('SELECT * FROM templates WHERE (LOWER(name) = ? OR LOWER(category) = ?) AND user_id = ?', [id.toLowerCase(), id.toLowerCase(), userId]).catch(() => null);
-        if (data) return new Template(data);
+        const keyNameMap = {
+            'classic': 'Classic Receipt',
+            '1': 'Classic Receipt',
+            'minimal': 'Minimal Clean Bill',
+            '2': 'Minimal Clean Bill',
+            'pro': 'Shop Pro',
+            '3': 'Shop Pro',
+            'eco': 'Eco Print',
+            '4': 'Eco Print',
+            'modern': 'Modern Shop',
+            '5': 'Modern Shop',
+            'elite': 'Business Elite',
+            '6': 'Business Elite'
+        };
+        const mappedName = keyNameMap[String(id).toLowerCase()];
+        if (mappedName) {
+            data = await queryOne(
+                'SELECT * FROM templates WHERE name = ? AND user_id = ?',
+                [mappedName, userId]
+            ).catch(() => null);
+            if (data) return new Template(data);
+        }
 
-        // 4. Fallback to user's first available template or default
         const userTemplates = await Template.findByUserId(userId);
         return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
     }
