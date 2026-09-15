@@ -275,4 +275,26 @@ export default class Bill {
             total: Number(res?.total || 0)
         };
     }
+
+    static async delete(id, userId) {
+        const connection = await beginTransaction();
+        try {
+            const bill = await queryOne('SELECT id FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
+            if (!bill) {
+                connection.release();
+                return false;
+            }
+
+            await connection.query('DELETE FROM bill_items WHERE bill_id = ?', [id]);
+            await connection.query('DELETE FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
+
+            await connection.commit();
+            connection.release();
+            return true;
+        } catch (err) {
+            await connection.rollback();
+            connection.release();
+            throw err;
+        }
+    }
 }

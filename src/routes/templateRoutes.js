@@ -1,13 +1,12 @@
 import express from 'express';
 import { getTemplates, createTemplate, duplicateTemplate, deleteTemplate } from '../controllers/templateController.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(authMiddleware);
-router.get('/', getTemplates);
-router.post('/', createTemplate);
-router.post('/:id/duplicate', duplicateTemplate);
-router.delete('/:id', deleteTemplate);
+router.get('/', optionalAuth, getTemplates);
+router.post('/', authMiddleware, createTemplate);
+router.post('/:id/duplicate', authMiddleware, duplicateTemplate);
+router.delete('/:id', authMiddleware, deleteTemplate);
 
 export default router;

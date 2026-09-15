@@ -191,6 +191,8 @@ export const initDatabase = async () => {
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS gstin TEXT;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS show_tax INTEGER DEFAULT 1;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(5,2) DEFAULT 18.00;
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_template_id TEXT;
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_discount NUMERIC(10,2) DEFAULT 0.00;
 
                 DROP VIEW IF EXISTS user_shop_details CASCADE;
 
@@ -292,6 +294,16 @@ export const initDatabase = async () => {
                     amount NUMERIC(10,2) DEFAULT 0.00,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS menu_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS products (
@@ -400,6 +412,9 @@ export const initDatabase = async () => {
                 )
             `);
 
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_template_id TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_discount REAL DEFAULT 0.00'); } catch (_) {}
+
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS customers (
                     id TEXT PRIMARY KEY,
@@ -421,16 +436,31 @@ export const initDatabase = async () => {
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     name TEXT NOT NULL,
+                    category TEXT,
+                    badge TEXT,
                     width TEXT DEFAULT '58mm',
                     show_tax INTEGER DEFAULT 1,
                     tax_rate REAL DEFAULT 18.00,
                     footer TEXT DEFAULT 'Thank you for shopping with us!',
+                    description TEXT,
+                    gradient TEXT,
+                    accent_color TEXT,
+                    features TEXT,
+                    is_builtin INTEGER DEFAULT 0,
                     is_default INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             `);
+
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN category TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN badge TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN description TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN gradient TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN accent_color TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN features TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN is_builtin INTEGER DEFAULT 0'); } catch (_) {}
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS bills (
@@ -527,7 +557,17 @@ export const initDatabase = async () => {
                     payment_status TEXT DEFAULT 'completed',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                )
+                );
+
+                CREATE TABLE IF NOT EXISTS menu_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    price REAL NOT NULL DEFAULT 0.00,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
             `);
 
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
@@ -538,6 +578,7 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_menu_items_user_id ON menu_items(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
 

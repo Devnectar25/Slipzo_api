@@ -14,6 +14,8 @@ export default class Shop {
         this.invoice_prefix = data.invoice_prefix || 'SLP';
         this.invoice_sequence = Number(data.invoice_sequence || 1001);
         this.invoice_format = data.invoice_format || 'PREFIX-DATE-SEQ';
+        this.default_template_id = data.default_template_id || '';
+        this.default_discount = Number(data.default_discount !== undefined ? data.default_discount : 0);
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
