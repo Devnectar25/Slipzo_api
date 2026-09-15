@@ -120,6 +120,13 @@ export const login = async (req, res, next) => {
         }
         console.log('✅ Password validated');
 
+        // Ensure user has default receipt templates seeded in database
+        try {
+            await Template.seedDefaultTemplates(user.id);
+        } catch (tmplErr) {
+            console.warn('⚠️ Non-critical template seed warning during login:', tmplErr.message);
+        }
+
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         

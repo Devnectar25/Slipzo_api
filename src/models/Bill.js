@@ -29,86 +29,145 @@ export default class Bill {
     static async create(billData) {
         const totals = calculateBillTotals(billData.items, billData.discount, billData.tax_rate);
         
-        let billNumber = billData.number;
-        if (!billNumber || billNumber === 'SLP-DRAFT' || billNumber.trim() === '') {
-            billNumber = generateBillNumber(
-                billData.shop?.invoice_prefix || 'SLP',
-                billData.shop?.invoice_sequence || 1001,
-                billData.shop?.invoice_format || 'PREFIX-DATE-SEQ'
-            );
+        let shopInfo = billData.shop;
+        if (!shopInfo && billData.user_id) {
+            shopInfo = await queryOne('SELECT * FROM shops WHERE user_id = ?', [billData.user_id]);
+        }
+        shopInfo = shopInfo || {};
+
+        let currentSeq = Number(shopInfo.invoice_sequence) || 1001;
+        const prefix = shopInfo.invoice_prefix || 'SLP';
+        const format = shopInfo.invoice_format || 'PREFIX-DATE-SEQ';
+
+        let billNumber = billData.number ? String(billData.number).trim() : '';
+        if (!billNumber || billNumber === 'SLP-DRAFT') {
+            billNumber = generateBillNumber(prefix, currentSeq, format);
         }
 
-        const bill = {
-            id: uuidv4(),
-            user_id: billData.user_id,
-            template_id: billData.template_id,
-            customer_id: billData.customer_id || null,
-            customer_name: billData.customer_name || '',
-            customer_phone: billData.customer_phone || '',
-            number: billNumber,
-            discount: Number(billData.discount) || 0,
-            tax_rate: Number(billData.tax_rate) || 0,
-            payment_mode: billData.payment_mode || 'Cash',
-            shop_name: billData.shop_name || '',
-            shop_address: billData.shop_address || '',
-            shop_phone: billData.shop_phone || '',
-            template_name: billData.template_name || '',
-            template_width: billData.template_width || '58mm',
-            subtotal: totals.subtotal,
-            tax_amount: totals.tax_amount,
-            total: totals.total
-        };
+        // Pre-check uniqueness of billNumber, incrementing sequence if already taken
+        let existing = await queryOne('SELECT id FROM bills WHERE number = ?', [billNumber]);
+        let attempts = 0;
+        while (existing && attempts < 100) {
+            attempts++;
+            currentSeq++;
+            billNumber = generateBillNumber(prefix, currentSeq, format);
+            existing = await queryOne('SELECT id FROM bills WHERE number = ?', [billNumber]);
+        }
 
-        const connection = await beginTransaction();
+        let insertedBillId = null;
+        let retryCount = 0;
 
-        try {
-            // Insert bill
-            const keys = Object.keys(bill);
-            const values = Object.values(bill);
-            const placeholders = keys.map(() => '?').join(', ');
-            
-            await connection.query(
-                `INSERT INTO bills (${keys.join(', ')}) VALUES (${placeholders})`,
-                values
-            );
+        while (!insertedBillId && retryCount < 5) {
+            retryCount++;
+            const connection = await beginTransaction();
 
-            // Insert bill items
-            for (const item of billData.items) {
-                const itemData = {
+            try {
+                // Atomic print quota verification inside transaction
+                const subRows = await connection.query(
+                    `SELECT SUM(prints_count) as total_purchased FROM subscriptions WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)`,
+                    [billData.user_id]
+                );
+                const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
+                const totalPrints = 10 + purchasedPrints;
+
+                const billRows = await connection.query(
+                    `SELECT COUNT(*) as used_count FROM bills WHERE user_id = ?`,
+                    [billData.user_id]
+                );
+                const usedPrints = Number(billRows[0]?.used_count || 0);
+
+                if (totalPrints - usedPrints <= 0) {
+                    const quotaErr = new Error('Print quota limit reached. You have 0 prints remaining. Please purchase a plan to create more bills.');
+                    quotaErr.statusCode = 403;
+                    throw quotaErr;
+                }
+
+                const bill = {
                     id: uuidv4(),
-                    bill_id: bill.id,
-                    name: item.name,
-                    quantity: Number(item.quantity) || 1,
-                    rate: Number(item.rate) || 0,
-                    amount: (Number(item.quantity) || 1) * (Number(item.rate) || 0)
+                    user_id: billData.user_id,
+                    template_id: billData.template_id,
+                    customer_id: billData.customer_id || null,
+                    customer_name: billData.customer_name || '',
+                    customer_phone: billData.customer_phone || '',
+                    number: billNumber,
+                    discount: Number(billData.discount) || 0,
+                    tax_rate: Number(billData.tax_rate) || 0,
+                    payment_mode: billData.payment_mode || 'Cash',
+                    shop_name: billData.shop_name || '',
+                    shop_address: billData.shop_address || '',
+                    shop_phone: billData.shop_phone || '',
+                    template_name: billData.template_name || '',
+                    template_width: billData.template_width || '58mm',
+                    subtotal: totals.subtotal,
+                    tax_amount: totals.tax_amount,
+                    total: totals.total
                 };
-                
-                const itemKeys = Object.keys(itemData);
-                const itemValues = Object.values(itemData);
-                const itemPlaceholders = itemKeys.map(() => '?').join(', ');
+
+                // Insert bill
+                const keys = Object.keys(bill);
+                const values = Object.values(bill);
+                const placeholders = keys.map(() => '?').join(', ');
                 
                 await connection.query(
-                    `INSERT INTO bill_items (${itemKeys.join(', ')}) VALUES (${itemPlaceholders})`,
-                    itemValues
+                    `INSERT INTO bills (${keys.join(', ')}) VALUES (${placeholders})`,
+                    values
                 );
+
+                // Insert bill items
+                for (const item of billData.items) {
+                    const itemData = {
+                        id: uuidv4(),
+                        bill_id: bill.id,
+                        name: item.name,
+                        quantity: Number(item.quantity) || 1,
+                        rate: Number(item.rate) || 0,
+                        amount: (Number(item.quantity) || 1) * (Number(item.rate) || 0)
+                    };
+                    
+                    const itemKeys = Object.keys(itemData);
+                    const itemValues = Object.values(itemData);
+                    const itemPlaceholders = itemKeys.map(() => '?').join(', ');
+                    
+                    await connection.query(
+                        `INSERT INTO bill_items (${itemKeys.join(', ')}) VALUES (${itemPlaceholders})`,
+                        itemValues
+                    );
+                }
+
+                // Increment shop's invoice sequence safely
+                const shopRows = await connection.query('SELECT invoice_sequence FROM shops WHERE user_id = ?', [billData.user_id]);
+                const dbShopSeq = Number(shopRows[0]?.invoice_sequence || 1000);
+                const nextShopSeq = Math.max(dbShopSeq + 1, currentSeq + 1);
+
+                await connection.query(
+                    `UPDATE shops SET invoice_sequence = ? WHERE user_id = ?`,
+                    [nextShopSeq, billData.user_id]
+                );
+
+                await connection.commit();
+                connection.release();
+
+                insertedBillId = bill.id;
+            } catch (err) {
+                await connection.rollback();
+                connection.release();
+
+                const isDupNumber = err.message?.includes('bills_number_key') || 
+                                   err.message?.includes('bills.number') || 
+                                   err.message?.includes('UNIQUE constraint failed: bills.number') ||
+                                   err.message?.includes('Duplicate entry');
+
+                if (isDupNumber && retryCount < 5) {
+                    currentSeq++;
+                    billNumber = generateBillNumber(prefix, currentSeq, format);
+                    continue;
+                }
+                throw err;
             }
-
-            // Increment shop's invoice sequence if shop exists
-            await connection.query(
-                `UPDATE shops SET invoice_sequence = COALESCE(invoice_sequence, 1000) + 1 WHERE user_id = ?`,
-                [billData.user_id]
-            );
-
-            await connection.commit();
-            connection.release();
-
-            // Fetch complete bill with items
-            return await Bill.findById(bill.id);
-        } catch (err) {
-            await connection.rollback();
-            connection.release();
-            throw err;
         }
+
+        // Fetch complete bill with items
+        return await Bill.findById(insertedBillId);
     }
 
     static async findById(id) {
@@ -128,10 +187,17 @@ export default class Bill {
     }
 
     static async findByUserId(userId, options = {}) {
-        const { page, limit, search, payment_mode } = options;
+        const { page, limit, search, payment_mode, daysLimit } = options;
 
         let baseSql = `FROM bills WHERE user_id = ?`;
         const params = [userId];
+
+        if (daysLimit) {
+            const daysNum = Number(daysLimit) || 10;
+            const cutoffDate = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
+            baseSql += ` AND created_at >= ?`;
+            params.push(cutoffDate);
+        }
 
         if (search && search.trim()) {
             baseSql += ` AND (number LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ?)`;
