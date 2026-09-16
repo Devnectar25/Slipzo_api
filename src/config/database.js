@@ -395,6 +395,8 @@ export const initDatabase = async () => {
             `);
 
 
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) {}
+
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS shops (
                     id TEXT PRIMARY KEY,
@@ -402,9 +404,14 @@ export const initDatabase = async () => {
                     name TEXT NOT NULL,
                     address TEXT,
                     phone TEXT,
+                    gstin TEXT,
+                    show_tax INTEGER DEFAULT 1,
+                    tax_rate REAL DEFAULT 18.00,
                     invoice_prefix TEXT DEFAULT 'SLP',
                     invoice_sequence INTEGER DEFAULT 1001,
                     invoice_format TEXT DEFAULT 'PREFIX-DATE-SEQ',
+                    default_template_id TEXT,
+                    default_discount REAL DEFAULT 0.00,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -412,6 +419,9 @@ export const initDatabase = async () => {
                 )
             `);
 
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN gstin TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN show_tax INTEGER DEFAULT 1'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN tax_rate REAL DEFAULT 18.00'); } catch (_) {}
             try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_template_id TEXT'); } catch (_) {}
             try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_discount REAL DEFAULT 0.00'); } catch (_) {}
 
@@ -430,6 +440,9 @@ export const initDatabase = async () => {
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             `);
+
+            try { await sqliteRun('ALTER TABLE customers ADD COLUMN gstin TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE customers ADD COLUMN notes TEXT'); } catch (_) {}
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS templates (
@@ -557,8 +570,18 @@ export const initDatabase = async () => {
                     payment_status TEXT DEFAULT 'completed',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
+                )
+            `);
 
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_name TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_email TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_name TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN amount NUMERIC(10,2) DEFAULT 0.00'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN prints_count INTEGER DEFAULT 0'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_id TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_status TEXT DEFAULT "completed"'); } catch (_) {}
+
+            await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS menu_items (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -567,7 +590,7 @@ export const initDatabase = async () => {
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
+                )
             `);
 
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
