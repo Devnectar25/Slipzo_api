@@ -298,6 +298,9 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
                 p.category, 
                 p.tax_rate, 
                 p.stock as stock_quantity, 
+                p.image,
+                p.images,
+                p.status,
                 p.created_at,
                 u.name as user_name, 
                 u.email as user_email, 
@@ -308,10 +311,162 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
             ORDER BY p.created_at DESC
         `;
         const products = await query(sql);
-        return res.json({ products: products || [] });
+        const normalized = (products || []).map(p => ({
+            ...p,
+            status: (p.status || 'active').toLowerCase().trim()
+        }));
+        return res.json({ products: normalized });
     } catch (err) {
         console.error('❌ Error fetching products for admin:', err);
         return res.status(500).json({ detail: 'Failed to fetch products' });
+    }
+});
+
+// Create New Admin Product with Photos
+router.post('/products', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { name, category, price, tax_rate, images, image, status } = req.body;
+        if (!name || !name.trim()) {
+            return res.status(400).json({ detail: 'Product name is required' });
+        }
+
+        const cleanName = name.trim();
+        const existingProd = await queryOne(`SELECT * FROM products WHERE LOWER(name) = ?`, [cleanName.toLowerCase()]);
+        if (existingProd) {
+            return res.status(200).json({ detail: 'Product already exists in catalog', product: existingProd });
+        }
+
+        let photoList = [];
+        if (Array.isArray(images)) {
+            photoList = images;
+        } else if (typeof images === 'string' && images.trim()) {
+            try { photoList = JSON.parse(images); } catch (_) { photoList = [images]; }
+        } else if (image) {
+            photoList = [image];
+        }
+
+        if (photoList.length < 3) {
+            return res.status(400).json({ detail: 'Please upload at least 3 product photos.' });
+        }
+        if (photoList.length > 5) {
+            return res.status(400).json({ detail: 'You can upload a maximum of 5 product photos.' });
+        }
+
+        const { v4: uuidv4 } = await import('uuid');
+        const id = uuidv4();
+        const now = new Date().toISOString();
+
+        const adminUser = await queryOne('SELECT id FROM users ORDER BY created_at ASC LIMIT 1');
+        if (!adminUser || !adminUser.id) {
+            return res.status(400).json({ detail: 'No system user found to associate product.' });
+        }
+        const userId = adminUser.id;
+
+        const mainImage = photoList[0] || image || '';
+        const imagesJson = JSON.stringify(photoList);
+        const prodStatus = (status || 'active').toLowerCase().trim();
+
+        await query(
+            `INSERT INTO products (id, user_id, name, price, category, tax_rate, stock, image, images, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                id, 
+                userId, 
+                name.trim(), 
+                parseFloat(price) || 0, 
+                category ? category.trim() : 'General', 
+                parseFloat(tax_rate) || 0, 
+                100, 
+                mainImage, 
+                imagesJson, 
+                prodStatus,
+                now, 
+                now
+            ]
+        );
+
+        const newProd = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
+        return res.status(201).json({ detail: 'Product created successfully', product: newProd });
+    } catch (err) {
+        console.error('❌ Error creating admin product:', err);
+        return res.status(500).json({ detail: 'Failed to create product' });
+    }
+});
+
+// Update Admin Product (General or Status)
+router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, name, price, category, tax_rate, stock } = req.body;
+        
+        let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
+        if (!existing && name) {
+            existing = await queryOne(`SELECT * FROM products WHERE LOWER(name) = ?`, [name.trim().toLowerCase()]);
+        }
+        if (!existing) {
+            return res.status(404).json({ detail: 'Product not found' });
+        }
+
+        const targetId = existing.id;
+        const newStatus = status ? status.toLowerCase().trim() : (existing.status || 'active');
+        const newName = name !== undefined ? name.trim() : existing.name;
+        const newPrice = price !== undefined ? parseFloat(price) : existing.price;
+        const newCat = category !== undefined ? category.trim() : existing.category;
+        const newTax = tax_rate !== undefined ? parseFloat(tax_rate) : existing.tax_rate;
+        const newStock = stock !== undefined ? parseInt(stock) : existing.stock;
+        const now = new Date().toISOString();
+
+        await query(
+            `UPDATE products SET name = ?, price = ?, category = ?, tax_rate = ?, stock = ?, status = ?, updated_at = ? WHERE id = ?`,
+            [newName, newPrice, newCat, newTax, newStock, newStatus, now, targetId]
+        );
+
+        const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
+        return res.json({ detail: 'Product updated successfully', product: updated });
+    } catch (err) {
+        console.error('❌ Error updating admin product:', err);
+        return res.status(500).json({ detail: 'Failed to update product' });
+    }
+});
+
+// Update Admin Product Status (Active / Inactive)
+router.put('/products/:id/status', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, name } = req.body;
+        if (!status || !['active', 'inactive'].includes(status.toLowerCase().trim())) {
+            return res.status(400).json({ detail: 'Invalid status. Must be "active" or "inactive".' });
+        }
+        const newStatus = status.toLowerCase().trim();
+        const now = new Date().toISOString();
+
+        let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
+        if (!existing && name) {
+            existing = await queryOne(`SELECT * FROM products WHERE LOWER(name) = ?`, [name.trim().toLowerCase()]);
+        }
+        if (!existing) {
+            return res.status(404).json({ detail: 'Product not found' });
+        }
+
+        const targetId = existing.id;
+        await query(`UPDATE products SET status = ?, updated_at = ? WHERE id = ?`, [newStatus, now, targetId]);
+        const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
+        return res.json({ detail: 'Product status updated successfully', product: updated });
+    } catch (err) {
+        console.error('❌ Error updating admin product status:', err);
+        return res.status(500).json({ detail: 'Failed to update product status' });
+    }
+});
+
+// Delete Admin Product
+router.delete('/products/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await query(`DELETE FROM products WHERE id = ?`, [id]);
+        return res.json({ detail: 'Product deleted successfully' });
+    } catch (err) {
+        console.error('❌ Error deleting admin product:', err);
+        return res.status(500).json({ detail: 'Failed to delete product' });
     }
 });
 
