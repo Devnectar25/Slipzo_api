@@ -28,10 +28,11 @@ app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// Rate limiting (relaxed for development)
+// Rate limiting (relaxed for development and admin)
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: process.env.NODE_ENV === 'production' ? 100 : 5000, // Limit in prod, generous in dev
+    max: 10000, // Generous limit so users and admins never hit 429 errors
+    skip: (req) => req.originalUrl?.includes('/admin') || req.path?.includes('/admin'),
     message: { detail: 'Too many requests, please try again later.' }
 });
 app.use('/api', limiter);
@@ -70,8 +71,8 @@ app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(cookieParser());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Initialize database
 console.log('🔧 Initializing database...');

@@ -323,6 +323,8 @@ export const initDatabase = async () => {
                 );
 
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS image TEXT;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS images TEXT;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
 
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
@@ -519,6 +521,8 @@ export const initDatabase = async () => {
             `);
 
             try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) {}
+            try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) {}
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS sessions (

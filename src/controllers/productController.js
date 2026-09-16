@@ -3,7 +3,7 @@ import Product from '../models/Product.js';
 export const getProducts = async (req, res, next) => {
     try {
         const { search, category } = req.query;
-        const products = await Product.findByUserId(req.user.id, search, category);
+        const products = await Product.findByUserId(req.user.id, search, category, true);
         res.json(products);
     } catch (err) {
         next(err);
