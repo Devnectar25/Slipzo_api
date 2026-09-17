@@ -42,11 +42,20 @@ export const updateShop = async (req, res, next) => {
     const updates = {
       name: name.trim(),
       address: address?.trim() || '',
-      phone: phone?.trim() || '',
-      gstin: gstin ? String(gstin).trim().toUpperCase() : '',
-      show_tax: show_tax !== undefined ? Number(show_tax) : 1,
-      tax_rate: tax_rate !== undefined ? Number(tax_rate) : 18.00
+      phone: phone?.trim() || ''
     };
+
+    if (gstin !== undefined) {
+      updates.gstin = gstin ? String(gstin).trim().toUpperCase() : '';
+    }
+
+    if (show_tax !== undefined) {
+      updates.show_tax = Number(show_tax);
+    }
+
+    if (tax_rate !== undefined) {
+      updates.tax_rate = Number(tax_rate);
+    }
 
     if (invoice_prefix !== undefined) {
       const cleanPrefix = String(invoice_prefix).trim().toUpperCase();
