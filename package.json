@@ -4,8 +4,8 @@
   "description": "Slipzo - Digital Receipt Management Backend",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node --experimental-websocket server.js",
+    "dev": "nodemon --exec \"node --experimental-websocket\" server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
