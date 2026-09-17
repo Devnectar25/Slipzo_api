@@ -385,17 +385,17 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
             `INSERT INTO products (id, user_id, name, price, category, product_link, stock, image, images, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                id, 
-                userId, 
-                name.trim(), 
-                parseFloat(price) || 0, 
-                category ? category.trim() : 'General', 
-                cleanLink, 
-                100, 
-                mainImage, 
-                imagesJson, 
+                id,
+                userId,
+                name.trim(),
+                parseFloat(price) || 0,
+                category ? category.trim() : 'General',
+                parseFloat(tax_rate) || 0,
+                100,
+                mainImage,
+                imagesJson,
                 prodStatus,
-                now, 
+                now,
                 now
             ]
         );
@@ -412,8 +412,8 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, name, price, category, product_link, stock } = req.body;
-        
+        const { status, name, price, category, tax_rate, stock } = req.body;
+
         let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
         if (!existing && name) {
             existing = await queryOne(`SELECT * FROM products WHERE LOWER(name) = ?`, [name.trim().toLowerCase()]);

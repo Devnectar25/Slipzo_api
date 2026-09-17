@@ -57,7 +57,7 @@ export const sqliteRun = (sql, params = []) => {
     if (isPg) return query(sql, params);
     if (!sqliteDb) return Promise.resolve({ lastID: null, changes: 0, affectedRows: 0 });
     return new Promise((resolve, reject) => {
-        sqliteDb.run(sql, params, function(err) {
+        sqliteDb.run(sql, params, function (err) {
             if (err) return reject(err);
             resolve({ lastID: this.lastID, changes: this.changes, affectedRows: this.changes });
         });
@@ -401,9 +401,7 @@ export const initDatabase = async () => {
             `);
 
 
-            try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE users ADD COLUMN onboarding_reward_claimed INTEGER DEFAULT 0'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE users ADD COLUMN prints_used INTEGER DEFAULT 0'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS shops (
@@ -427,11 +425,11 @@ export const initDatabase = async () => {
                 )
             `);
 
-            try { await sqliteRun('ALTER TABLE shops ADD COLUMN gstin TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE shops ADD COLUMN show_tax INTEGER DEFAULT 1'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE shops ADD COLUMN tax_rate REAL DEFAULT 18.00'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_template_id TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_discount REAL DEFAULT 0.00'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN gstin TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN show_tax INTEGER DEFAULT 1'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN tax_rate REAL DEFAULT 18.00'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_template_id TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_discount REAL DEFAULT 0.00'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS customers (
@@ -449,8 +447,8 @@ export const initDatabase = async () => {
                 )
             `);
 
-            try { await sqliteRun('ALTER TABLE customers ADD COLUMN gstin TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE customers ADD COLUMN notes TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE customers ADD COLUMN gstin TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE customers ADD COLUMN notes TEXT'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS templates (
@@ -475,13 +473,13 @@ export const initDatabase = async () => {
                 )
             `);
 
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN category TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN badge TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN description TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN gradient TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN accent_color TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN features TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE templates ADD COLUMN is_builtin INTEGER DEFAULT 0'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN category TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN badge TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN description TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN gradient TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN accent_color TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN features TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE templates ADD COLUMN is_builtin INTEGER DEFAULT 0'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS bills (
@@ -540,10 +538,9 @@ export const initDatabase = async () => {
                 )
             `);
 
-            try { await sqliteRun('ALTER TABLE products ADD COLUMN product_link TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) {}
-            try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -585,13 +582,13 @@ export const initDatabase = async () => {
                 )
             `);
 
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_name TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_email TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_name TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN amount NUMERIC(10,2) DEFAULT 0.00'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN prints_count INTEGER DEFAULT 0'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_id TEXT'); } catch (_) {}
-            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_status TEXT DEFAULT "completed"'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_name TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_email TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_name TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN amount NUMERIC(10,2) DEFAULT 0.00'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN prints_count INTEGER DEFAULT 0'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_id TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN payment_status TEXT DEFAULT "completed"'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS menu_items (
@@ -724,7 +721,7 @@ export const beginTransaction = async () => {
                 client.release();
             },
             release: () => {
-                try { client.release(); } catch (e) {}
+                try { client.release(); } catch (e) { }
             }
         };
     } else {
@@ -733,18 +730,18 @@ export const beginTransaction = async () => {
             query: async (sql, params = []) => query(sql, params),
             commit: async () => sqliteRun('COMMIT'),
             rollback: async () => sqliteRun('ROLLBACK'),
-            release: () => {}
+            release: () => { }
         };
     }
 };
 
-export default { 
-    db: sqliteDb, 
-    query, 
-    queryOne, 
-    insert, 
-    update, 
-    deleteById, 
+export default {
+    db: sqliteDb,
+    query,
+    queryOne,
+    insert,
+    update,
+    deleteById,
     initDatabase,
     beginTransaction,
     supabase,
