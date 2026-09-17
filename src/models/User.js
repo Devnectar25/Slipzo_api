@@ -9,6 +9,8 @@ class User {
         this.name = data.name;
         this.email = data.email;
         this.password = data.password;
+        this.onboarding_reward_claimed = data.onboarding_reward_claimed !== undefined ? Number(data.onboarding_reward_claimed) : 0;
+        this.prints_used = Number(data.prints_used || 0);
         this.shop = data.shop || null;
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
@@ -37,7 +39,9 @@ class User {
                 username: username,
                 name: userData.name.trim(),
                 email: userData.email.toLowerCase().trim(),
-                password: hashedPassword
+                password: hashedPassword,
+                onboarding_reward_claimed: 0,
+                prints_used: 0
             };
 
             console.log('📝 Inserting user into database...');

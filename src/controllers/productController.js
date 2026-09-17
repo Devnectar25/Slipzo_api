@@ -3,7 +3,8 @@ import Product from '../models/Product.js';
 export const getProducts = async (req, res, next) => {
     try {
         const { search, category } = req.query;
-        const products = await Product.findByUserId(req.user.id, search, category, true);
+        const userId = req.user?.id || null;
+        const products = await Product.findByUserId(userId, search, category, true);
         res.json(products);
     } catch (err) {
         next(err);
@@ -12,7 +13,7 @@ export const getProducts = async (req, res, next) => {
 
 export const getProductStats = async (req, res, next) => {
     try {
-        const stats = await Product.getStats(req.user.id);
+        const stats = await Product.getStats(req.user?.id || '');
         res.json(stats);
     } catch (err) {
         next(err);
@@ -22,7 +23,7 @@ export const getProductStats = async (req, res, next) => {
 export const getProduct = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const product = await Product.findByIdAndUser(id, req.user.id);
+        const product = await Product.findByIdAndUser(id, req.user?.id || '');
 
         if (!product) {
             return res.status(404).json({ detail: 'Product not found' });
@@ -36,7 +37,7 @@ export const getProduct = async (req, res, next) => {
 
 export const createProduct = async (req, res, next) => {
     try {
-        const { name, price, category, sku, tax_rate, stock, image, description } = req.body;
+        const { name, price, category, sku, product_link, stock, image, description } = req.body;
 
         if (!name || !name.trim()) {
             return res.status(400).json({ detail: 'Product name is required' });
@@ -48,7 +49,7 @@ export const createProduct = async (req, res, next) => {
             price,
             category,
             sku,
-            tax_rate,
+            product_link,
             stock,
             image,
             description

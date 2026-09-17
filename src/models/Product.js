@@ -7,7 +7,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         price: 2699, 
         category: "Hardware", 
         sku: "NIYAMA-58BT", 
-        tax_rate: 18, 
+        product_link: "https://slipzo.in/products", 
         stock: 18, 
         image: "/products/niyama_printer.jpg",
         description: "Rechargeable 58mm Bluetooth handheld mobile thermal printer with battery indicator and high-speed receipt printing" 
@@ -17,7 +17,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         price: 420, 
         category: "Hardware", 
         sku: "HANSOL-SMAX-10", 
-        tax_rate: 18, 
+        product_link: "https://slipzo.in/products", 
         stock: 95, 
         image: "/products/hansol_rolls.jpg",
         description: "Premium grade Hansol SUPERMAX smooth, jam-free thermal receipt rolls for clear dark printing" 
@@ -27,7 +27,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         price: 2850, 
         category: "Hardware", 
         sku: "POS-BT200", 
-        tax_rate: 18, 
+        product_link: "https://slipzo.in/products", 
         stock: 12, 
         image: "/products/pos_printer.jpg",
         description: "Portable 58mm wireless thermal printer for Android & iOS with rechargeable battery" 
@@ -37,7 +37,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         price: 450, 
         category: "Hardware", 
         sku: "ROLL-80MM-10", 
-        tax_rate: 18, 
+        product_link: "https://slipzo.in/products", 
         stock: 85, 
         image: "/products/paper_rolls.jpg",
         description: "ATPOS premium smooth thermal paper rolls, jam-free dark printing for POS terminals" 
@@ -79,9 +79,10 @@ class Product {
     }
 
     static async create(data) {
-        const { user_id, name, price = 0, category = 'General', sku = '', tax_rate = 0, stock = 100, image = '', images = '', description = '', status = 'active' } = data;
+        const { user_id, name, price = 0, category = 'General', sku = '', product_link = '', stock = 100, image = '', images = '', description = '', status = 'active' } = data;
         const cleanName = name ? name.trim() : '';
         const cleanSku = sku ? sku.trim() : '';
+        const cleanLink = product_link ? product_link.trim() : '';
 
         // Duplicate prevention check: return existing record if product with exact SKU or Name already exists
         if (cleanSku) {
@@ -99,9 +100,9 @@ class Product {
         const statusStr = (status || 'active').toLowerCase().trim();
 
         await query(
-            `INSERT INTO products (id, user_id, name, price, category, sku, tax_rate, stock, image, images, description, status, created_at, updated_at)
+            `INSERT INTO products (id, user_id, name, price, category, sku, product_link, stock, image, images, description, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, user_id, cleanName, parseFloat(price) || 0, category.trim() || 'General', cleanSku || null, parseFloat(tax_rate) || 0, parseInt(stock) || 100, image ? image.trim() : '', imagesStr, description ? description.trim() : '', statusStr, now, now]
+            [id, user_id, cleanName, parseFloat(price) || 0, category.trim() || 'General', cleanSku || null, cleanLink, parseInt(stock) || 100, image ? image.trim() : '', imagesStr, description ? description.trim() : '', statusStr, now, now]
         );
 
         return await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
@@ -115,7 +116,7 @@ class Product {
         const price = data.price !== undefined ? parseFloat(data.price) : product.price;
         const category = data.category !== undefined ? data.category.trim() : product.category;
         const sku = data.sku !== undefined ? (data.sku ? data.sku.trim() : null) : product.sku;
-        const tax_rate = data.tax_rate !== undefined ? parseFloat(data.tax_rate) : product.tax_rate;
+        const product_link = data.product_link !== undefined ? (data.product_link ? data.product_link.trim() : '') : (product.product_link || '');
         const stock = data.stock !== undefined ? parseInt(data.stock) : product.stock;
         const image = data.image !== undefined ? (data.image ? data.image.trim() : '') : (product.image || '');
         const images = data.images !== undefined ? (typeof data.images === 'string' ? data.images : JSON.stringify(data.images)) : (product.images || '');
@@ -125,9 +126,9 @@ class Product {
 
         await query(
             `UPDATE products 
-             SET name = ?, price = ?, category = ?, sku = ?, tax_rate = ?, stock = ?, image = ?, images = ?, description = ?, status = ?, updated_at = ?
+             SET name = ?, price = ?, category = ?, sku = ?, product_link = ?, stock = ?, image = ?, images = ?, description = ?, status = ?, updated_at = ?
              WHERE id = ?`,
-            [name, price, category, sku, tax_rate, stock, image, images, description, status, now, id]
+            [name, price, category, sku, product_link, stock, image, images, description, status, now, id]
         );
 
         return await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);

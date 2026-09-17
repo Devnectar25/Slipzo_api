@@ -169,6 +169,8 @@ export const initDatabase = async () => {
                 );
 
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_reward_claimed INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS prints_used INTEGER DEFAULT 0;
 
                 CREATE TABLE IF NOT EXISTS shops (
                     id TEXT PRIMARY KEY,
@@ -313,6 +315,7 @@ export const initDatabase = async () => {
                     price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
                     category TEXT DEFAULT 'General',
                     sku TEXT,
+                    product_link TEXT,
                     tax_rate NUMERIC(5,2) DEFAULT 0.00,
                     stock INTEGER DEFAULT 100,
                     image TEXT,
@@ -322,6 +325,7 @@ export const initDatabase = async () => {
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS product_link TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS image TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS images TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
@@ -398,6 +402,8 @@ export const initDatabase = async () => {
 
 
             try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN onboarding_reward_claimed INTEGER DEFAULT 0'); } catch (_) {}
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN prints_used INTEGER DEFAULT 0'); } catch (_) {}
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS shops (
@@ -523,6 +529,7 @@ export const initDatabase = async () => {
                     price REAL NOT NULL DEFAULT 0.00,
                     category TEXT DEFAULT 'General',
                     sku TEXT,
+                    product_link TEXT,
                     tax_rate REAL DEFAULT 0.00,
                     stock INTEGER DEFAULT 100,
                     image TEXT,
@@ -533,6 +540,7 @@ export const initDatabase = async () => {
                 )
             `);
 
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN product_link TEXT'); } catch (_) {}
             try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) {}
             try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) {}
             try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) {}

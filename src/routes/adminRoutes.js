@@ -296,6 +296,7 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
                 p.name, 
                 p.price, 
                 p.category, 
+                p.product_link,
                 p.tax_rate, 
                 p.stock as stock_quantity, 
                 p.image,
@@ -325,9 +326,23 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
 // Create New Admin Product with Photos
 router.post('/products', adminAuthMiddleware, async (req, res) => {
     try {
-        const { name, category, price, tax_rate, images, image, status } = req.body;
+        const { name, category, price, product_link, images, image, status } = req.body;
         if (!name || !name.trim()) {
             return res.status(400).json({ detail: 'Product name is required' });
+        }
+
+        if (!product_link || !product_link.trim()) {
+            return res.status(400).json({ detail: 'Product link is required' });
+        }
+
+        const cleanLink = product_link.trim();
+        try {
+            const parsedUrl = new URL(cleanLink);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                return res.status(400).json({ detail: 'Please enter a valid HTTP or HTTPS product link URL' });
+            }
+        } catch (_) {
+            return res.status(400).json({ detail: 'Please enter a valid URL for the product link' });
         }
 
         const cleanName = name.trim();
@@ -345,8 +360,8 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
             photoList = [image];
         }
 
-        if (photoList.length < 3) {
-            return res.status(400).json({ detail: 'Please upload at least 3 product photos.' });
+        if (photoList.length < 1) {
+            return res.status(400).json({ detail: 'Please upload at least 1 product photo.' });
         }
         if (photoList.length > 5) {
             return res.status(400).json({ detail: 'You can upload a maximum of 5 product photos.' });
@@ -367,7 +382,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
         const prodStatus = (status || 'active').toLowerCase().trim();
 
         await query(
-            `INSERT INTO products (id, user_id, name, price, category, tax_rate, stock, image, images, status, created_at, updated_at)
+            `INSERT INTO products (id, user_id, name, price, category, product_link, stock, image, images, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 id, 
@@ -375,7 +390,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
                 name.trim(), 
                 parseFloat(price) || 0, 
                 category ? category.trim() : 'General', 
-                parseFloat(tax_rate) || 0, 
+                cleanLink, 
                 100, 
                 mainImage, 
                 imagesJson, 
@@ -397,7 +412,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, name, price, category, tax_rate, stock } = req.body;
+        const { status, name, price, category, product_link, stock } = req.body;
         
         let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
         if (!existing && name) {
@@ -412,13 +427,13 @@ router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
         const newName = name !== undefined ? name.trim() : existing.name;
         const newPrice = price !== undefined ? parseFloat(price) : existing.price;
         const newCat = category !== undefined ? category.trim() : existing.category;
-        const newTax = tax_rate !== undefined ? parseFloat(tax_rate) : existing.tax_rate;
+        const newLink = product_link !== undefined ? (product_link ? product_link.trim() : '') : (existing.product_link || '');
         const newStock = stock !== undefined ? parseInt(stock) : existing.stock;
         const now = new Date().toISOString();
 
         await query(
-            `UPDATE products SET name = ?, price = ?, category = ?, tax_rate = ?, stock = ?, status = ?, updated_at = ? WHERE id = ?`,
-            [newName, newPrice, newCat, newTax, newStock, newStatus, now, targetId]
+            `UPDATE products SET name = ?, price = ?, category = ?, product_link = ?, stock = ?, status = ?, updated_at = ? WHERE id = ?`,
+            [newName, newPrice, newCat, newLink, newStock, newStatus, now, targetId]
         );
 
         const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
