@@ -36,14 +36,6 @@ export const createBill = async (req, res, next) => {
             number
         } = req.body;
         
-        // Validate user print quota before creating bill
-        const currentQuota = await Subscription.getQuotaByUserId(req.user.id);
-        if (currentQuota.printsRemaining <= 0) {
-            return res.status(403).json({ 
-                detail: 'Print quota limit reached. You have 0 prints remaining. Please purchase a plan to create more bills.' 
-            });
-        }
-        
         // Validate items with proper checks
         if (!items || !items.length) {
             return res.status(400).json({ 

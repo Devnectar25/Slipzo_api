@@ -76,12 +76,21 @@ class Subscription {
         printsRemaining: 10,
         availablePrints: 10,
         isFreeTier: true,
-        activePlanName: 'Free Starter Tier'
+        activePlanName: 'Free Starter Tier',
+        onboardingRewardClaimed: true
       };
     }
 
     try {
-      // 1. Get total purchased prints from subscriptions table
+      // 1. Check user record for onboarding reward and prints_used
+      const userRows = await query(
+        `SELECT onboarding_reward_claimed, prints_used FROM users WHERE id = ?`,
+        [userId]
+      ).catch(() => []);
+      const rewardClaimed = Number(userRows[0]?.onboarding_reward_claimed || 0) === 1;
+      const usedPrints = Math.max(0, Number(userRows[0]?.prints_used || 0));
+
+      // 2. Get total purchased prints from subscriptions table
       const subRows = await query(
         `SELECT SUM(prints_count) as total_purchased, MAX(plan_name) as latest_plan 
          FROM subscriptions 
@@ -92,16 +101,11 @@ class Subscription {
       const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
       const latestPlan = subRows[0]?.latest_plan || null;
 
-      // 2. Base free starter prints = 10
-      const totalPrints = 10 + purchasedPrints;
+      // 3. Base free starter prints = 10 if reward claimed, 0 otherwise
+      const baseFreePrints = rewardClaimed ? 10 : 0;
+      const totalPrints = baseFreePrints + purchasedPrints;
 
-      // 3. Count total bills created by this user in database
-      const billRows = await query(
-        `SELECT COUNT(*) as used_count FROM bills WHERE user_id = ?`,
-        [userId]
-      ).catch(() => []);
-
-      const usedPrints = Number(billRows[0]?.used_count || 0);
+      // 4. Calculate prints remaining based on actual prints used
       const printsRemaining = Math.max(0, totalPrints - usedPrints);
 
       return {
@@ -110,7 +114,8 @@ class Subscription {
         printsRemaining,
         availablePrints: printsRemaining,
         isFreeTier: purchasedPrints === 0,
-        activePlanName: latestPlan || (purchasedPrints > 0 ? 'Active Plan' : 'Free Starter Tier')
+        activePlanName: latestPlan || (purchasedPrints > 0 ? 'Active Plan' : (rewardClaimed ? 'Free Starter Tier' : 'New Account (Pending Setup)')),
+        onboardingRewardClaimed: rewardClaimed
       };
     } catch (err) {
       console.error('Error computing quota for user:', userId, err);
@@ -120,7 +125,8 @@ class Subscription {
         printsRemaining: 10,
         availablePrints: 10,
         isFreeTier: true,
-        activePlanName: 'Free Starter Tier'
+        activePlanName: 'Free Starter Tier',
+        onboardingRewardClaimed: false
       };
     }
   }
