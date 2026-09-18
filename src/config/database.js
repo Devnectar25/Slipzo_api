@@ -402,6 +402,8 @@ export const initDatabase = async () => {
 
 
             try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN onboarding_reward_claimed INTEGER DEFAULT 0'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN prints_used INTEGER DEFAULT 0'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS shops (
