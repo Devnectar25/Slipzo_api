@@ -67,7 +67,8 @@ class User {
             const data = await queryOne('SELECT * FROM users WHERE email = ?', [email.toLowerCase().trim()]);
             if (data) {
                 console.log('✅ User found by email:', email);
-                return new User(data);
+                const shop = await queryOne('SELECT * FROM shops WHERE user_id = ?', [data.id]);
+                return new User({ ...data, shop });
             }
             console.log('❌ User not found by email:', email);
             return null;

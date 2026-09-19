@@ -20,9 +20,9 @@ export const createContactSubmission = async (req, res, next) => {
     if (phone && phone.trim()) {
       const trimmedPhone = phone.trim();
       const phoneDigits = trimmedPhone.replace(/\D/g, '');
-      const phoneFormatRegex = /^[\d\+\-\(\)\s]{7,20}$/;
-      if (!phoneFormatRegex.test(trimmedPhone) || phoneDigits.length < 7 || phoneDigits.length > 15) {
-        return res.status(400).json({ detail: 'Please enter a valid phone number (7 to 15 digits, e.g. +91 98765 43210)' });
+      const isValid10Digit = phoneDigits.length === 10 || (phoneDigits.length === 12 && phoneDigits.startsWith('91'));
+      if (!isValid10Digit) {
+        return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number' });
       }
     }
 
