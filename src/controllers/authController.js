@@ -127,6 +127,19 @@ export const login = async (req, res, next) => {
             console.warn('⚠️ Non-critical template seed warning during login:', tmplErr.message);
         }
 
+        // Ensure user has a default shop attached
+        if (!user.shop) {
+            try {
+                const shop = await Shop.create({
+                    user_id: user.id,
+                    name: `${user.name || 'My'}'s Shop`
+                });
+                user.shop = shop;
+            } catch (shopErr) {
+                console.warn('⚠️ Shop creation warning during login:', shopErr.message);
+            }
+        }
+
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         

@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { query, queryOne } from '../config/database.js';
 import ContactSubmission from '../models/ContactSubmission.js';
+import MenuItem from '../models/MenuItem.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
@@ -538,4 +539,124 @@ router.post('/users/:id/grant-prints', adminAuthMiddleware, async (req, res) => 
     }
 });
 
+// ==========================================
+// ADMIN MASTER MENU MANAGEMENT ENDPOINTS
+// ==========================================
+
+// Get All Master Menu Items (with search, category, pagination)
+router.get('/menu', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { search = '', category = 'all', page = 1, limit = 50 } = req.query;
+        const result = await MenuItem.findAllAdmin({ search, category, page, limit });
+        return res.json(result);
+    } catch (err) {
+        console.error('❌ Error fetching admin menu items:', err);
+        return res.status(500).json({ detail: 'Failed to fetch menu items' });
+    }
+});
+
+// Create New Master Menu Item
+router.post('/menu', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { name, price, category, image_url, description, is_available } = req.body;
+
+        if (!name || !name.trim()) {
+            return res.status(400).json({ detail: 'Item name is required' });
+        }
+
+        const numPrice = parseFloat(price);
+        if (price === undefined || isNaN(numPrice) || numPrice < 0) {
+            return res.status(400).json({ detail: 'Base price must be a non-negative number' });
+        }
+
+        const item = await MenuItem.createMaster({
+            name: name.trim(),
+            price: numPrice,
+            category: (category || '').trim() || 'General',
+            image_url: image_url || '',
+            description: (description || '').trim(),
+            is_available: is_available !== undefined ? Boolean(is_available) : true
+        });
+
+        return res.status(201).json({ detail: 'Master menu item created successfully', item });
+    } catch (err) {
+        console.error('❌ Error creating master menu item:', err);
+        return res.status(500).json({ detail: 'Failed to create menu item' });
+    }
+});
+
+// Update Master Menu Item
+router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, price, category, image_url, description, is_available } = req.body;
+
+        if (name !== undefined && !name.trim()) {
+            return res.status(400).json({ detail: 'Item name cannot be empty' });
+        }
+
+        if (price !== undefined) {
+            const numPrice = parseFloat(price);
+            if (isNaN(numPrice) || numPrice < 0) {
+                return res.status(400).json({ detail: 'Base price must be a non-negative number' });
+            }
+        }
+
+        const updated = await MenuItem.updateMaster(id, req.body);
+        if (!updated) {
+            return res.status(404).json({ detail: 'Master menu item not found' });
+        }
+
+        return res.json({ detail: 'Master menu item updated successfully', item: updated });
+    } catch (err) {
+        console.error('❌ Error updating master menu item:', err);
+        return res.status(500).json({ detail: 'Failed to update menu item' });
+    }
+});
+
+// Toggle Master Menu Item Status (Active / Inactive)
+router.put('/menu/:id/status', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { is_available } = req.body;
+
+        if (is_available === undefined) {
+            return res.status(400).json({ detail: 'is_available status is required' });
+        }
+
+        const updated = await MenuItem.updateMaster(id, { is_available: Boolean(is_available) });
+        if (!updated) {
+            return res.status(404).json({ detail: 'Master menu item not found' });
+        }
+
+        return res.json({ detail: 'Master menu item status updated', item: updated });
+    } catch (err) {
+        console.error('❌ Error updating menu item status:', err);
+        return res.status(500).json({ detail: 'Failed to update menu item status' });
+    }
+});
+
+// Delete / Safe Deactivate Master Menu Item
+router.delete('/menu/:id', adminAuthMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await MenuItem.deleteMaster(id);
+
+        if (!result.deleted) {
+            return res.status(404).json({ detail: 'Master menu item not found' });
+        }
+
+        return res.json({
+            detail: result.softDeleted 
+                ? 'Item is currently in user menus, so it was deactivated to protect user billing data.'
+                : 'Master menu item deleted successfully.',
+            softDeleted: result.softDeleted
+        });
+    } catch (err) {
+        console.error('❌ Error deleting master menu item:', err);
+        return res.status(500).json({ detail: 'Failed to delete menu item' });
+    }
+});
+
 export default router;
+

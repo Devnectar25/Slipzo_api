@@ -300,13 +300,38 @@ export const initDatabase = async () => {
 
                 CREATE TABLE IF NOT EXISTS menu_items (
                     id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
+                    user_id TEXT,
                     name TEXT NOT NULL,
                     price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    category TEXT DEFAULT 'General',
+                    image_url TEXT,
+                    description TEXT,
+                    is_available BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
+
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'General';
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS image_url TEXT;
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS description TEXT;
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;
+
+                CREATE TABLE IF NOT EXISTS user_menu_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    menu_item_id TEXT NOT NULL,
+                    custom_price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE,
+                    CONSTRAINT unique_user_menu_item UNIQUE (user_id, menu_item_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id);
 
                 CREATE TABLE IF NOT EXISTS products (
                     id TEXT PRIMARY KEY,
@@ -541,6 +566,43 @@ export const initDatabase = async () => {
             try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) { }
             try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) { }
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS menu_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    name TEXT NOT NULL,
+                    price REAL NOT NULL DEFAULT 0.00,
+                    category TEXT DEFAULT 'General',
+                    image_url TEXT,
+                    description TEXT,
+                    is_available INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN category TEXT DEFAULT 'General'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN image_url TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN description TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN is_available INTEGER DEFAULT 1"); } catch (_) { }
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS user_menu_items (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    menu_item_id TEXT NOT NULL,
+                    custom_price REAL NOT NULL DEFAULT 0.00,
+                    is_active INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE,
+                    UNIQUE (user_id, menu_item_id)
+                )
+            `);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id)`);
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS sessions (

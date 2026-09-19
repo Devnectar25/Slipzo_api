@@ -30,8 +30,9 @@ export const updateShop = async (req, res, next) => {
 
     if (phone && phone.trim()) {
       const digitsOnly = phone.trim().replace(/[^0-9]/g, '');
-      if (digitsOnly.length < 7 || digitsOnly.length > 15) {
-        return res.status(400).json({ detail: 'Please enter a valid phone number (7-15 digits)' });
+      const isValid10Digit = digitsOnly.length === 10 || (digitsOnly.length === 12 && digitsOnly.startsWith('91'));
+      if (!isValid10Digit) {
+        return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number' });
       }
     }
 
