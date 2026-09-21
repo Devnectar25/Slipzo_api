@@ -9,6 +9,7 @@ export default class Shop {
         this.address = data.address || '';
         this.phone = data.phone || '';
         this.gstin = data.gstin || '';
+        this.logo_url = data.logo_url || '';
         this.show_tax = data.show_tax !== undefined ? Number(data.show_tax) : 1;
         this.tax_rate = Number(data.tax_rate !== undefined ? data.tax_rate : 18.00);
         this.invoice_prefix = data.invoice_prefix || 'SLP';
@@ -23,6 +24,7 @@ export default class Shop {
     static async create(shopData) {
         const shop = {
             id: uuidv4(),
+            logo_url: shopData.logo_url || '',
             ...shopData
         };
         await insert('shops', shop);

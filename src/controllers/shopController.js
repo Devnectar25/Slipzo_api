@@ -87,6 +87,10 @@ export const updateShop = async (req, res, next) => {
       updates.default_discount = isNaN(disc) || disc < 0 ? 0 : disc;
     }
 
+    if (req.body.logo_url !== undefined) {
+      updates.logo_url = req.body.logo_url ? String(req.body.logo_url).trim() : '';
+    }
+
     const shop = await Shop.update(req.user.id, updates);
 
     if (!shop) {

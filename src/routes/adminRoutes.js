@@ -136,6 +136,8 @@ router.get('/users', adminAuthMiddleware, async (req, res) => {
                 s.name as shop_name, 
                 s.phone as shop_phone, 
                 s.address as shop_address,
+                s.logo_url as shop_profile,
+                s.logo_url as shop_logo_url,
                 s.invoice_prefix,
                 s.gstin as shop_gstin,
                 (SELECT COUNT(*) FROM bills WHERE user_id = u.id) as bill_count,
