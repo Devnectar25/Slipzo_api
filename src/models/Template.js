@@ -161,53 +161,25 @@ export default class Template {
         return new Template(template);
     }
 
-    static async seedDefaultTemplates(userId) {
+    static async getMasterTemplates() {
         try {
-            const existing = await query('SELECT name FROM templates WHERE user_id = ?', [userId]).catch(() => []);
-            const existingNames = new Set((existing || []).map(e => e.name));
-
-            const toInsert = BUILTIN_TEMPLATES_DEFS.filter(t => !existingNames.has(t.name));
-            if (toInsert.length > 0) {
-                for (const t of toInsert) {
-                    await Template.create({ user_id: userId, ...t }).catch(() => null);
-                }
-            }
-
-            const rows = await query(
-                'SELECT * FROM templates WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
-                [userId]
-            ).catch(() => []);
-
+            const rows = await query('SELECT * FROM templates ORDER BY created_at ASC');
             if (rows && rows.length > 0) {
                 return rows.map(r => new Template(r));
             }
         } catch (err) {
-            console.error('⚠️ Template seeding warning:', err.message);
+            console.error('⚠️ Error in Template.getMasterTemplates:', err);
         }
-
-        // Fallback: Return built-in default templates for user
-        return BUILTIN_TEMPLATES_DEFS.map(t => new Template({ ...t, user_id: userId }));
+        return BUILTIN_TEMPLATES_DEFS.map(t => new Template(t));
     }
 
     static async findByUserId(userId) {
-        try {
-            let templates = await query(
-                'SELECT * FROM templates WHERE user_id = ? ORDER BY is_default DESC, created_at DESC',
-                [userId]
-            ).catch(() => []);
-
-            if (!templates || templates.length === 0) {
-                return await Template.seedDefaultTemplates(userId);
-            }
-
-            return templates.map(t => new Template(t));
-        } catch (err) {
-            console.error('⚠️ Error in Template.findByUserId:', err);
-            return BUILTIN_TEMPLATES_DEFS.map(t => new Template({ ...t, user_id: userId }));
-        }
+        // Templates table represents the master catalog, so all users access the master templates
+        return await Template.getMasterTemplates();
     }
 
     static async findById(id) {
+        if (!id) return null;
         let data = await queryOne('SELECT * FROM templates WHERE id = ? OR name = ?', [id, id]).catch(() => null);
         if (!data) {
             const keyNameMap = {
@@ -234,48 +206,19 @@ export default class Template {
 
     static async findByIdAndUser(id, userId) {
         if (!id) {
-            const userTemplates = await Template.findByUserId(userId);
-            return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
+            const master = await Template.getMasterTemplates();
+            return master.find(t => t.is_default) || master[0];
         }
 
-        let data = await queryOne(
-            'SELECT * FROM templates WHERE (id = ? OR name = ?) AND user_id = ?',
-            [id, id, userId]
-        ).catch(() => null);
-        if (data) return new Template(data);
+        const template = await Template.findById(id);
+        if (template) return template;
 
-        data = await queryOne('SELECT * FROM templates WHERE id = ?', [id]).catch(() => null);
-        if (data) return new Template(data);
-
-        const keyNameMap = {
-            'classic': 'Classic Receipt',
-            '1': 'Classic Receipt',
-            'minimal': 'Minimal Clean Bill',
-            '2': 'Minimal Clean Bill',
-            'pro': 'Shop Pro',
-            '3': 'Shop Pro',
-            'eco': 'Eco Print',
-            '4': 'Eco Print',
-            'modern': 'Modern Shop',
-            '5': 'Modern Shop',
-            'elite': 'Business Elite',
-            '6': 'Business Elite'
-        };
-        const mappedName = keyNameMap[String(id).toLowerCase()];
-        if (mappedName) {
-            data = await queryOne(
-                'SELECT * FROM templates WHERE name = ? AND user_id = ?',
-                [mappedName, userId]
-            ).catch(() => null);
-            if (data) return new Template(data);
-        }
-
-        const userTemplates = await Template.findByUserId(userId);
-        return userTemplates[0] || new Template({ ...BUILTIN_TEMPLATES_DEFS[0], user_id: userId });
+        const master = await Template.getMasterTemplates();
+        return master.find(t => t.is_default) || master[0];
     }
 
     static async deleteById(id, userId) {
-        const template = await Template.findByIdAndUser(id, userId);
+        const template = await Template.findById(id);
         if (!template) return false;
 
         if (template.is_default) {
