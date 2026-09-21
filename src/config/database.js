@@ -195,6 +195,7 @@ export const initDatabase = async () => {
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(5,2) DEFAULT 18.00;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_template_id TEXT;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_discount NUMERIC(10,2) DEFAULT 0.00;
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS logo_url TEXT;
 
                 DROP VIEW IF EXISTS user_shop_details CASCADE;
 
@@ -209,6 +210,8 @@ export const initDatabase = async () => {
                     s.name AS shop_name,
                     s.address AS shop_address,
                     s.phone AS shop_phone,
+                    s.logo_url AS shop_profile,
+                    s.logo_url AS shop_logo_url,
                     s.gstin AS shop_gstin,
                     s.show_tax AS shop_show_tax,
                     s.tax_rate AS shop_tax_rate,
