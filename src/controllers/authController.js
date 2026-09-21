@@ -62,13 +62,6 @@ export const register = async (req, res, next) => {
             // Continue even if shop creation fails - user still exists
         }
 
-        // Seed all UI receipt templates into database for new user
-        try {
-            await Template.seedDefaultTemplates(user.id);
-            console.log('✅ UI Templates seeded into database');
-        } catch (templateError) {
-            console.error('❌ Template seeding error:', templateError);
-        }
 
 
         // Generate token
@@ -120,12 +113,6 @@ export const login = async (req, res, next) => {
         }
         console.log('✅ Password validated');
 
-        // Ensure user has default receipt templates seeded in database
-        try {
-            await Template.seedDefaultTemplates(user.id);
-        } catch (tmplErr) {
-            console.warn('⚠️ Non-critical template seed warning during login:', tmplErr.message);
-        }
 
         // Ensure user has a default shop attached
         if (!user.shop) {
