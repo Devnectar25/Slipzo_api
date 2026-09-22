@@ -201,6 +201,16 @@ export default class Template {
                 data = await queryOne('SELECT * FROM templates WHERE name = ?', [mappedName]).catch(() => null);
             }
         }
+        if (!data) {
+            const sId = String(id).toLowerCase().trim();
+            const builtin = BUILTIN_TEMPLATES_DEFS.find(t => 
+                String(t.id).toLowerCase() === sId ||
+                String(t.templateId).toLowerCase() === sId ||
+                String(t.name).toLowerCase() === sId ||
+                String(t.name).toLowerCase().includes(sId)
+            );
+            if (builtin) return new Template(builtin);
+        }
         return data ? new Template(data) : null;
     }
 
@@ -212,6 +222,18 @@ export default class Template {
 
         const template = await Template.findById(id);
         if (template) return template;
+
+        const userTemplates = await Template.findByUserId(userId);
+        if (Array.isArray(userTemplates) && userTemplates.length > 0) {
+            const sId = String(id).toLowerCase().trim();
+            const matched = userTemplates.find(t => 
+                String(t.id).toLowerCase() === sId ||
+                String(t.templateId).toLowerCase() === sId ||
+                String(t.name).toLowerCase() === sId ||
+                String(t.name).toLowerCase().includes(sId)
+            );
+            if (matched) return matched;
+        }
 
         const master = await Template.getMasterTemplates();
         return master.find(t => t.is_default) || master[0];

@@ -210,8 +210,6 @@ export const initDatabase = async () => {
                     s.name AS shop_name,
                     s.address AS shop_address,
                     s.phone AS shop_phone,
-                    s.logo_url AS shop_profile,
-                    s.logo_url AS shop_logo_url,
                     s.gstin AS shop_gstin,
                     s.show_tax AS shop_show_tax,
                     s.tax_rate AS shop_tax_rate,

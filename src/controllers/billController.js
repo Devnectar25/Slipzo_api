@@ -77,17 +77,18 @@ export const createBill = async (req, res, next) => {
         
         // Get template: try exact ID match, name/alias match, or default fallback
         let template = null;
-        if (template_id) {
-            template = await Template.findByIdAndUser(template_id, req.user.id);
+        const targetTemplateId = template_id || shop.default_template_id;
+        if (targetTemplateId) {
+            template = await Template.findById(targetTemplateId);
             if (!template) {
-                template = await Template.findById(template_id);
+                template = await Template.findByIdAndUser(targetTemplateId, req.user.id);
             }
         }
         
         if (!template) {
             const userTemplates = await Template.findByUserId(req.user.id);
             if (Array.isArray(userTemplates) && userTemplates.length > 0) {
-                const targetStr = String(template_id || shop.default_template_id || '').trim().toLowerCase();
+                const targetStr = String(targetTemplateId || '').trim().toLowerCase();
                 
                 const aliasMap = {
                     'classic': ['classic receipt', 'classic'],
