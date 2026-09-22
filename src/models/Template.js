@@ -185,16 +185,22 @@ export default class Template {
             const keyNameMap = {
                 'classic': 'Classic Receipt',
                 '1': 'Classic Receipt',
+                '0442d846-0a89-4d90-800a-48278ec089d7': 'Classic Receipt',
                 'minimal': 'Minimal Clean Bill',
                 '2': 'Minimal Clean Bill',
+                'bcaa2c28-0aeb-468e-8789-d5edfd2eee0c': 'Minimal Clean Bill',
                 'pro': 'Shop Pro',
                 '3': 'Shop Pro',
+                'b55d6642-d218-43c3-b8a8-918e87d9712d': 'Shop Pro',
                 'eco': 'Eco Print',
                 '4': 'Eco Print',
+                'cc510d5f-07bf-4ce4-8c50-6ec1995c85f4': 'Eco Print',
                 'modern': 'Modern Shop',
                 '5': 'Modern Shop',
+                '4638c377-7094-4325-bf15-eb7c6de54ff6': 'Modern Shop',
                 'elite': 'Business Elite',
-                '6': 'Business Elite'
+                '6': 'Business Elite',
+                'ee17a09d-5b86-47bc-b862-2fc6bbcba2b9': 'Business Elite'
             };
             const mappedName = keyNameMap[String(id).toLowerCase()];
             if (mappedName) {
