@@ -680,9 +680,23 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_menu_items_user_id ON menu_items(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
-
             console.log('✅ SQLite 3 Database initialized successfully!');
         }
+
+        try {
+            const MenuItem = (await import('../models/MenuItem.js')).default;
+            await MenuItem.seedDefaultMenuItems();
+        } catch (e) {
+            console.warn('⚠️ Menu items seeding notice:', e.message);
+        }
+
+        try {
+            const Product = (await import('../models/Product.js')).default;
+            await Product.seedDefaultProducts();
+        } catch (e) {
+            console.warn('⚠️ Product seeding notice:', e.message);
+        }
+
         isDbInitialized = true;
     } catch (err) {
         console.error('❌ Failed to initialize database:', err.message);

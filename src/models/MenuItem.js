@@ -175,4 +175,31 @@ export default class MenuItem {
         const affected = result ? (result.affectedRows || result.changes || 0) : 0;
         return { deleted: affected > 0, softDeleted: false };
     }
+
+    static async seedDefaultMenuItems() {
+        try {
+            const { DEFAULT_CATALOG_ITEMS } = await import('../config/defaultMenuItems.js');
+            for (const item of DEFAULT_CATALOG_ITEMS) {
+                const existing = await queryOne('SELECT id FROM menu_items WHERE LOWER(name) = ?', [item.name.toLowerCase()]);
+                if (!existing) {
+                    const now = new Date().toISOString();
+                    await insert('menu_items', {
+                        id: uuidv4(),
+                        user_id: null,
+                        name: item.name,
+                        price: item.price,
+                        category: item.category,
+                        image_url: item.image_url,
+                        description: item.description,
+                        is_available: 1,
+                        created_at: now,
+                        updated_at: now
+                    });
+                }
+            }
+        } catch (err) {
+            console.error('⚠️ Failed to seed default menu items:', err);
+        }
+    }
 }
+

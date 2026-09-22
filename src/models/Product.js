@@ -46,8 +46,53 @@ const DEFAULT_HARDWARE_PRODUCTS = [
 
 class Product {
     static async seedDefaultProducts(adminUserId = 'system-catalog') {
-        // Disabled: Database stores ONLY products created by Admin panel
-        return;
+        try {
+            const countResult = await queryOne(`SELECT COUNT(*) as count FROM products`);
+            const total = parseInt(countResult?.count || 0);
+            if (total > 0) return;
+
+            // Attempt to fetch from Supabase if connected
+            let supabaseProducts = null;
+            try {
+                const { supabase } = await import('../config/database.js');
+                if (supabase) {
+                    const { data, error } = await supabase.from('products').select('*');
+                    if (!error && Array.isArray(data) && data.length > 0) {
+                        supabaseProducts = data;
+                    }
+                }
+            } catch (_) {}
+
+            if (supabaseProducts && supabaseProducts.length > 0) {
+                console.log(`📦 Syncing ${supabaseProducts.length} products from Supabase to database...`);
+                for (const item of supabaseProducts) {
+                    await this.create({
+                        user_id: item.user_id || adminUserId,
+                        name: item.name,
+                        price: item.price,
+                        category: item.category || 'Hardware',
+                        sku: item.sku || '',
+                        product_link: item.product_link || '',
+                        stock: item.stock || 100,
+                        image: item.image || '',
+                        images: item.images || '',
+                        description: item.description || '',
+                        status: item.status || 'active'
+                    });
+                }
+                return;
+            }
+
+            console.log(`📦 Seeding default hardware products into database...`);
+            for (const item of DEFAULT_HARDWARE_PRODUCTS) {
+                await this.create({
+                    user_id: adminUserId,
+                    ...item
+                });
+            }
+        } catch (e) {
+            console.warn("⚠️ Failed to seed default products:", e.message);
+        }
     }
 
     static async findByUserId(userId, search = '', category = '', activeOnly = false) {
@@ -59,7 +104,7 @@ class Product {
         }
 
         if (category && category !== 'all' && category !== 'All') {
-            sql += ` AND category = ?`;
+            sql += ` AND LOWER(category) = LOWER(?)`;
             params.push(category);
         }
 
@@ -71,6 +116,13 @@ class Product {
 
         sql += ` ORDER BY created_at DESC`;
         let results = await query(sql, params);
+
+        // If no products exist yet and no filters applied, seed default products and re-query
+        if ((!results || results.length === 0) && !search && (!category || category === 'all' || category === 'All')) {
+            await this.seedDefaultProducts(userId || 'system-catalog');
+            results = await query(sql, params);
+        }
+
         return results || [];
     }
 
