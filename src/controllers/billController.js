@@ -33,7 +33,9 @@ export const createBill = async (req, res, next) => {
             customer_id,
             customer_name,
             customer_phone,
-            number
+            number,
+            template_name,
+            template_width
         } = req.body;
         
         // Validate items with proper checks
@@ -77,7 +79,7 @@ export const createBill = async (req, res, next) => {
         
         // Get template: try exact ID match, name/alias match, or default fallback
         let template = null;
-        const targetTemplateId = template_id || shop.default_template_id;
+        const targetTemplateId = template_id || template_name || shop.default_template_id;
         if (targetTemplateId) {
             template = await Template.findById(targetTemplateId);
             if (!template) {
@@ -120,8 +122,8 @@ export const createBill = async (req, res, next) => {
             // Ultimate fallback to default builtin template definition
             template = {
                 id: template_id || 'default-1',
-                name: 'Classic Receipt',
-                width: '58mm'
+                name: template_name || 'Classic Receipt',
+                width: template_width || '58mm'
             };
         }
         
@@ -140,8 +142,8 @@ export const createBill = async (req, res, next) => {
             shop_name: shop.name,
             shop_address: shop.address,
             shop_phone: shop.phone,
-            template_name: template.name,
-            template_width: template.width || '58mm',
+            template_name: template.name || template_name || '',
+            template_width: template.width || template_width || '58mm',
             shop
         });
 
