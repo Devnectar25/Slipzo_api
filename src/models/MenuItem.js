@@ -11,12 +11,53 @@ export default class MenuItem {
         this.image_url = data.image_url || '';
         this.description = data.description || '';
         this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
+        this.barcode = data.barcode || '';
+        this.barcode_type = data.barcode_type || 'INTERNAL';
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
         // Optional user assignment metadata when queried via catalog
         this.is_added = data.is_added !== undefined ? Boolean(data.is_added) : false;
         this.user_menu_item_id = data.user_menu_item_id || null;
         this.user_price = data.user_price !== undefined && data.user_price !== null ? Number(data.user_price) : null;
+    }
+
+    /**
+     * Generate next safe, collision-free internal Slipzo barcode (e.g., 'SLP-000051')
+     */
+    static async generateNextBarcode() {
+        const rows = await query(`
+            SELECT barcode 
+            FROM menu_items 
+            WHERE barcode LIKE 'SLP-%'
+            ORDER BY barcode DESC
+            LIMIT 500
+        `);
+
+        let maxNum = 0;
+        for (const row of (rows || [])) {
+            const match = String(row.barcode || '').match(/^SLP-(\d+)$/i);
+            if (match) {
+                const num = parseInt(match[1], 10);
+                if (!isNaN(num) && num > maxNum) {
+                    maxNum = num;
+                }
+            }
+        }
+
+        let nextNum = maxNum + 1;
+        let candidate = `SLP-${String(nextNum).padStart(6, '0')}`;
+
+        // Guard against any possible collision
+        let attempts = 0;
+        let existing = await queryOne('SELECT id FROM menu_items WHERE barcode = ?', [candidate]);
+        while (existing && attempts < 100) {
+            attempts++;
+            nextNum++;
+            candidate = `SLP-${String(nextNum).padStart(6, '0')}`;
+            existing = await queryOne('SELECT id FROM menu_items WHERE barcode = ?', [candidate]);
+        }
+
+        return candidate;
     }
 
     /**
@@ -33,6 +74,8 @@ export default class MenuItem {
                 mi.image_url,
                 mi.description,
                 mi.is_available,
+                mi.barcode,
+                mi.barcode_type,
                 mi.created_at,
                 mi.updated_at,
                 umi.id as user_menu_item_id,
@@ -46,8 +89,8 @@ export default class MenuItem {
         const params = [userId];
 
         if (search && search.trim()) {
-            sql += ` AND LOWER(mi.name) LIKE LOWER(?)`;
-            params.push(`%${search.trim()}%`);
+            sql += ` AND (LOWER(mi.name) LIKE LOWER(?) OR LOWER(mi.barcode) LIKE LOWER(?))`;
+            params.push(`%${search.trim()}%`, `%${search.trim()}%`);
         }
 
         if (category && category !== 'all' && category !== 'All') {
@@ -69,8 +112,8 @@ export default class MenuItem {
         const params = [];
 
         if (search && search.trim()) {
-            whereClause += ` AND (LOWER(name) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?))`;
-            params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+            whereClause += ` AND (LOWER(name) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(barcode) LIKE LOWER(?))`;
+            params.push(`%${search.trim()}%`, `%${search.trim()}%`, `%${search.trim()}%`);
         }
 
         if (category && category !== 'all' && category !== 'All') {
@@ -101,6 +144,14 @@ export default class MenuItem {
         return data ? new MenuItem(data) : null;
     }
 
+    static async findByBarcode(barcode) {
+        if (!barcode || !String(barcode).trim()) return null;
+        const clean = String(barcode).trim();
+        const sql = `SELECT * FROM menu_items WHERE LOWER(barcode) = LOWER(?)`;
+        const data = await queryOne(sql, [clean]);
+        return data ? new MenuItem(data) : null;
+    }
+
     static async createMaster(itemData) {
         const name = (itemData.name || '').trim();
         const price = Math.max(0, parseFloat(itemData.price) || 0);
@@ -109,6 +160,21 @@ export default class MenuItem {
         const description = (itemData.description || '').trim();
         const isAvailable = itemData.is_available !== undefined ? Boolean(itemData.is_available) : true;
         const now = new Date().toISOString();
+
+        let barcode = (itemData.barcode || '').trim();
+        let barcodeType = (itemData.barcode_type || 'INTERNAL').trim().toUpperCase();
+
+        if (barcode) {
+            const existingBarcode = await queryOne('SELECT id FROM menu_items WHERE barcode = ?', [barcode]);
+            if (existingBarcode) {
+                const err = new Error(`Barcode "${barcode}" is already assigned to another item.`);
+                err.statusCode = 400;
+                throw err;
+            }
+        } else {
+            barcode = await MenuItem.generateNextBarcode();
+            barcodeType = 'INTERNAL';
+        }
 
         const newItem = {
             id: uuidv4(),
@@ -119,6 +185,8 @@ export default class MenuItem {
             image_url: imageUrl,
             description,
             is_available: isAvailable,
+            barcode,
+            barcode_type: barcodeType,
             created_at: now,
             updated_at: now
         };
@@ -150,6 +218,21 @@ export default class MenuItem {
         if (updates.is_available !== undefined) {
             updatedData.is_available = Boolean(updates.is_available);
         }
+        if (updates.barcode !== undefined && updates.barcode.trim()) {
+            const cleanBarcode = updates.barcode.trim();
+            if (cleanBarcode !== existing.barcode) {
+                const barcodeCheck = await queryOne('SELECT id FROM menu_items WHERE barcode = ? AND id != ?', [cleanBarcode, id]);
+                if (barcodeCheck) {
+                    const err = new Error(`Barcode "${cleanBarcode}" is already assigned to another item.`);
+                    err.statusCode = 400;
+                    throw err;
+                }
+                updatedData.barcode = cleanBarcode;
+                if (updates.barcode_type) {
+                    updatedData.barcode_type = updates.barcode_type.trim().toUpperCase();
+                }
+            }
+        }
         updatedData.updated_at = new Date().toISOString();
 
         if (Object.keys(updatedData).length === 0) {
@@ -176,3 +259,4 @@ export default class MenuItem {
         return { deleted: affected > 0, softDeleted: false };
     }
 }
+

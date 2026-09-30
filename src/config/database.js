@@ -292,12 +292,15 @@ export const initDatabase = async () => {
                     id TEXT PRIMARY KEY,
                     bill_id TEXT NOT NULL,
                     name TEXT NOT NULL,
+                    barcode TEXT,
                     quantity INTEGER NOT NULL DEFAULT 1,
                     rate NUMERIC(10,2) NOT NULL DEFAULT 0.00,
                     amount NUMERIC(10,2) DEFAULT 0.00,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
                 );
+
+                ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS barcode TEXT;
 
                 CREATE TABLE IF NOT EXISTS menu_items (
                     id TEXT PRIMARY KEY,
@@ -317,6 +320,8 @@ export const initDatabase = async () => {
                 ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS image_url TEXT;
                 ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS description TEXT;
                 ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS barcode TEXT;
+                ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
 
                 CREATE TABLE IF NOT EXISTS user_menu_items (
                     id TEXT PRIMARY KEY,
@@ -405,6 +410,7 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number);
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email);
                 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
             `);
@@ -587,6 +593,8 @@ export const initDatabase = async () => {
             try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN image_url TEXT"); } catch (_) { }
             try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN description TEXT"); } catch (_) { }
             try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN is_available INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN barcode TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS user_menu_items (
@@ -674,6 +682,7 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_menu_items_user_id ON menu_items(user_id)`);
+            await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
 

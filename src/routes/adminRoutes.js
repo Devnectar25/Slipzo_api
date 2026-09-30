@@ -560,7 +560,7 @@ router.get('/menu', adminAuthMiddleware, async (req, res) => {
 // Create New Master Menu Item
 router.post('/menu', adminAuthMiddleware, async (req, res) => {
     try {
-        const { name, price, category, image_url, description, is_available } = req.body;
+        const { name, price, category, image_url, description, is_available, barcode, barcode_type } = req.body;
 
         if (!name || !name.trim()) {
             return res.status(400).json({ detail: 'Item name is required' });
@@ -577,13 +577,15 @@ router.post('/menu', adminAuthMiddleware, async (req, res) => {
             category: (category || '').trim() || 'General',
             image_url: image_url || '',
             description: (description || '').trim(),
-            is_available: is_available !== undefined ? Boolean(is_available) : true
+            is_available: is_available !== undefined ? Boolean(is_available) : true,
+            barcode: barcode ? String(barcode).trim() : undefined,
+            barcode_type: barcode_type ? String(barcode_type).trim().toUpperCase() : undefined
         });
 
         return res.status(201).json({ detail: 'Master menu item created successfully', item });
     } catch (err) {
         console.error('❌ Error creating master menu item:', err);
-        return res.status(500).json({ detail: 'Failed to create menu item' });
+        return res.status(err.statusCode || 500).json({ detail: err.message || 'Failed to create menu item' });
     }
 });
 
@@ -591,7 +593,7 @@ router.post('/menu', adminAuthMiddleware, async (req, res) => {
 router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, price, category, image_url, description, is_available } = req.body;
+        const { name, price, category, image_url, description, is_available, barcode, barcode_type } = req.body;
 
         if (name !== undefined && !name.trim()) {
             return res.status(400).json({ detail: 'Item name cannot be empty' });
@@ -612,7 +614,7 @@ router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
         return res.json({ detail: 'Master menu item updated successfully', item: updated });
     } catch (err) {
         console.error('❌ Error updating master menu item:', err);
-        return res.status(500).json({ detail: 'Failed to update menu item' });
+        return res.status(err.statusCode || 500).json({ detail: err.message || 'Failed to update menu item' });
     }
 });
 

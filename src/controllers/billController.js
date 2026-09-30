@@ -63,7 +63,9 @@ export const createBill = async (req, res, next) => {
                 throw new Error(`Item ${index + 1}: Rate cannot be negative`);
             }
 
-            return { name, quantity, rate };
+            const barcode = item.barcode ? String(item.barcode).trim() : null;
+
+            return { name, quantity, rate, barcode };
         });
         
         // Get shop: auto-create default if not found
