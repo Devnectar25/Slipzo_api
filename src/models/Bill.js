@@ -113,12 +113,13 @@ export default class Bill {
                     values
                 );
 
-                // Insert bill items
+                // Insert bill items snapshot
                 for (const item of billData.items) {
                     const itemData = {
                         id: uuidv4(),
                         bill_id: bill.id,
                         name: item.name,
+                        barcode: item.barcode || null,
                         quantity: Number(item.quantity) || 1,
                         rate: Number(item.rate) || 0,
                         amount: (Number(item.quantity) || 1) * (Number(item.rate) || 0)

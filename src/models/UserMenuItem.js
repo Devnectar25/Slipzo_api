@@ -13,6 +13,9 @@ export default class UserMenuItem {
         this.category = data.category || 'General';
         this.image_url = data.image_url || '';
         this.description = data.description || '';
+        this.barcode = data.barcode || '';
+        this.barcode_type = data.barcode_type || 'INTERNAL';
+        this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
         this.is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
@@ -33,6 +36,9 @@ export default class UserMenuItem {
                 mi.category,
                 mi.image_url,
                 mi.description,
+                mi.barcode,
+                mi.barcode_type,
+                mi.is_available,
                 mi.price as catalog_price
             FROM user_menu_items umi
             JOIN menu_items mi ON umi.menu_item_id = mi.id
@@ -41,8 +47,8 @@ export default class UserMenuItem {
         const params = [userId];
 
         if (search && search.trim()) {
-            sql += ` AND LOWER(mi.name) LIKE LOWER(?)`;
-            params.push(`%${search.trim()}%`);
+            sql += ` AND (LOWER(mi.name) LIKE LOWER(?) OR LOWER(mi.barcode) LIKE LOWER(?))`;
+            params.push(`%${search.trim()}%`, `%${search.trim()}%`);
         }
 
         if (category && category !== 'all' && category !== 'All') {
@@ -71,12 +77,44 @@ export default class UserMenuItem {
                 mi.category,
                 mi.image_url,
                 mi.description,
+                mi.barcode,
+                mi.barcode_type,
+                mi.is_available,
                 mi.price as catalog_price
             FROM user_menu_items umi
             JOIN menu_items mi ON umi.menu_item_id = mi.id
             WHERE umi.id = ? AND umi.user_id = ?
         `;
         const data = await queryOne(sql, [id, userId]);
+        return data ? new UserMenuItem(data) : null;
+    }
+
+    static async findByBarcodeAndUser(userId, barcode) {
+        if (!barcode || !String(barcode).trim()) return null;
+        const clean = String(barcode).trim();
+        const sql = `
+            SELECT 
+                umi.id,
+                umi.user_id,
+                umi.menu_item_id,
+                umi.custom_price,
+                umi.custom_price as price,
+                umi.is_active,
+                umi.created_at,
+                umi.updated_at,
+                mi.name,
+                mi.category,
+                mi.image_url,
+                mi.description,
+                mi.barcode,
+                mi.barcode_type,
+                mi.is_available,
+                mi.price as catalog_price
+            FROM user_menu_items umi
+            JOIN menu_items mi ON umi.menu_item_id = mi.id
+            WHERE umi.user_id = ? AND LOWER(mi.barcode) = LOWER(?)
+        `;
+        const data = await queryOne(sql, [userId, clean]);
         return data ? new UserMenuItem(data) : null;
     }
 

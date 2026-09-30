@@ -4,7 +4,8 @@ import {
     getCatalogItems,
     createMenuItem,
     updateMenuItem,
-    deleteMenuItem
+    deleteMenuItem,
+    lookupByBarcode
 } from '../controllers/menuController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -14,6 +15,7 @@ router.use(authMiddleware);
 
 router.get('/', getMenuItems);
 router.get('/catalog', getCatalogItems);
+router.get('/barcode/:barcode', lookupByBarcode);
 router.post('/', createMenuItem);
 router.put('/:id', updateMenuItem);
 router.delete('/:id', deleteMenuItem);
