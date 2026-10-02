@@ -52,11 +52,16 @@ export const register = async (req, res, next) => {
 
         // Create default shop
         try {
+            const rawType = String(req.body.business_type || '').trim().toLowerCase();
+            const allowedTypes = ['small_business', 'kirana_grocery', 'clothing_garments', 'hotel_food'];
+            const business_type = allowedTypes.includes(rawType) ? rawType : 'small_business';
+
             await Shop.create({
                 user_id: user.id,
-                name: `${name}'s Shop`
+                name: `${name}'s Shop`,
+                business_type
             });
-            console.log('✅ Default shop created');
+            console.log('✅ Default shop created with category:', business_type);
         } catch (shopError) {
             console.error('❌ Shop creation error:', shopError);
             // Continue even if shop creation fails - user still exists

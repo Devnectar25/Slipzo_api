@@ -5,6 +5,7 @@ import {
     createMenuItem,
     updateMenuItem,
     deleteMenuItem,
+    clearUserMenu,
     lookupByBarcode
 } from '../controllers/menuController.js';
 import { authMiddleware } from '../middleware/auth.js';
@@ -19,5 +20,6 @@ router.get('/barcode/:barcode', lookupByBarcode);
 router.post('/', createMenuItem);
 router.put('/:id', updateMenuItem);
 router.delete('/:id', deleteMenuItem);
+router.delete('/', clearUserMenu);
 
 export default router;
