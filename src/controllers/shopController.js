@@ -1,4 +1,5 @@
 import Shop from '../models/Shop.js';
+import UserMenuItem from '../models/UserMenuItem.js';
 import { supabase } from '../config/database.js';
 
 const BUCKET_NAME = 'Shop_Profile';
@@ -142,6 +143,20 @@ export const updateShop = async (req, res, next) => {
     if (req.body.default_discount !== undefined) {
       const disc = parseFloat(req.body.default_discount);
       updates.default_discount = isNaN(disc) || disc < 0 ? 0 : disc;
+    }
+
+    if (req.body.business_type !== undefined) {
+      const allowed = ['small_business', 'kirana_grocery', 'clothing_garments', 'hotel_food'];
+      const rawType = String(req.body.business_type).trim().toLowerCase();
+      const newType = allowed.includes(rawType) ? rawType : 'small_business';
+      
+      const currentShop = await Shop.findByUserId(req.user.id);
+      if (currentShop && currentShop.business_type !== newType) {
+        // Business category changed: clear all personal items from user's menu
+        await UserMenuItem.deleteAllByUserId(req.user.id);
+        console.log(`🧹 Cleared user_menu_items for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
+      }
+      updates.business_type = newType;
     }
 
     if (req.body.logo_url !== undefined) {

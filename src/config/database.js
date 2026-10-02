@@ -332,12 +332,43 @@ export const initDatabase = async () => {
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE,
                     CONSTRAINT unique_user_menu_item UNIQUE (user_id, menu_item_id)
                 );
 
+                try {
+                    await pgPool.query('ALTER TABLE user_menu_items DROP CONSTRAINT IF EXISTS user_menu_items_menu_item_id_fkey;');
+                } catch (_) { }
+
                 CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id);
                 CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id);
+
+                CREATE TABLE IF NOT EXISTS small_business (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    name TEXT NOT NULL,
+                    price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    category TEXT DEFAULT 'General',
+                    image_url TEXT,
+                    description TEXT,
+                    is_available BOOLEAN DEFAULT TRUE,
+                    barcode TEXT,
+                    barcode_type TEXT DEFAULT 'INTERNAL',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'General';
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS image_url TEXT;
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS description TEXT;
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS barcode TEXT;
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
+
+                CREATE INDEX IF NOT EXISTS idx_small_business_user_id ON small_business(user_id);
+                CREATE INDEX IF NOT EXISTS idx_small_business_name ON small_business(name);
+                CREATE INDEX IF NOT EXISTS idx_small_business_category ON small_business(category);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_small_business_barcode ON small_business(barcode) WHERE barcode IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS products (
                     id TEXT PRIMARY KEY,
@@ -612,6 +643,33 @@ export const initDatabase = async () => {
             `);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id)`);
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS small_business (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    name TEXT NOT NULL,
+                    price REAL NOT NULL DEFAULT 0.00,
+                    category TEXT DEFAULT 'General',
+                    image_url TEXT,
+                    description TEXT,
+                    is_available INTEGER DEFAULT 1,
+                    barcode TEXT,
+                    barcode_type TEXT DEFAULT 'INTERNAL',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN category TEXT DEFAULT 'General'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN image_url TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN description TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN is_available INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN barcode TEXT"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
+
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_small_business_user_id ON small_business(user_id)`);
+            await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_small_business_barcode ON small_business(barcode) WHERE barcode IS NOT NULL`);
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS sessions (

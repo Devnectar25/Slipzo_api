@@ -17,6 +17,7 @@ export default class Shop {
         this.invoice_format = data.invoice_format || 'PREFIX-DATE-SEQ';
         this.default_template_id = data.default_template_id || '';
         this.default_discount = Number(data.default_discount !== undefined ? data.default_discount : 0);
+        this.business_type = data.business_type || 'small_business';
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
@@ -25,6 +26,7 @@ export default class Shop {
         const shop = {
             id: uuidv4(),
             logo_url: shopData.logo_url || '',
+            business_type: shopData.business_type || 'small_business',
             ...shopData
         };
         await insert('shops', shop);

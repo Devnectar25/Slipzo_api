@@ -14,3 +14,37 @@ data/*.json
 *.sqlite
 *.sqlite3
 
+# Scripts, seed, test & temp files
+scripts/
+src/scripts/
+src/scripts/*
+test/
+seed/
+*.test.js
+*.spec.js
+check_*.js
+test_*.js
+seed_*.js
+inspect_*.js
+deploy_*.js
+fix_*.js
+audit_*.js
+check_barcodes.js
+inspect_schema_menu_items.js
+migrate_barcode_menu_items.js
+migrate_user_menu_items.js
+seed_menu_items_and_bucket.js
+upload_real_food_images.js
+upload_ui_images.js
+verify_menu_system.js
+check_catalog_images.js
+fast_check_images.js
+fix_all_catalog_images.js
+inspect_supabase_storage.js
+list_kirana_files.js
+test_http_images.js
+test_shop_category_and_barcode.js
+update_hotel_images.js
+
+
+
