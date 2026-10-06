@@ -23,6 +23,7 @@ export default class Bill {
         this.subtotal = Number(data.subtotal || 0);
         this.tax_amount = Number(data.tax_amount || 0);
         this.total = Number(data.total || 0);
+        this.table_number = data.table_number || '';
         this.created_at = data.created_at;
     }
 
@@ -82,6 +83,9 @@ export default class Bill {
                     throw quotaErr;
                 }
 
+                const rawTableNum = billData.table_number || billData.table || billData.table_name || '';
+                const cleanTableNum = rawTableNum ? String(rawTableNum).trim() : null;
+
                 const bill = {
                     id: uuidv4(),
                     user_id: billData.user_id,
@@ -89,6 +93,7 @@ export default class Bill {
                     customer_id: billData.customer_id || null,
                     customer_name: billData.customer_name || '',
                     customer_phone: billData.customer_phone || '',
+                    table_number: cleanTableNum,
                     number: billNumber,
                     discount: Number(billData.discount) || 0,
                     tax_rate: Number(billData.tax_rate) || 0,

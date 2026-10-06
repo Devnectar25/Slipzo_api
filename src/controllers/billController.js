@@ -35,7 +35,12 @@ export const createBill = async (req, res, next) => {
             customer_phone,
             number,
             template_name,
-            template_width
+            template_width,
+            table_number,
+            table,
+            table_name,
+            tableId,
+            table_id
         } = req.body;
         
         // Validate items with proper checks
@@ -136,6 +141,7 @@ export const createBill = async (req, res, next) => {
             customer_id: customer_id || null,
             customer_name: customer_name?.trim() || '',
             customer_phone: customer_phone?.trim() || '',
+            table_number: table_number || table || table_name || tableId || table_id || '',
             number: number?.trim() || '',
             items: normalizedItems,
             discount: Number(discount) || 0,

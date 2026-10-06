@@ -196,6 +196,8 @@ export const initDatabase = async () => {
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_template_id TEXT;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_discount NUMERIC(10,2) DEFAULT 0.00;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS logo_url TEXT;
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'small_business';
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS table_count INTEGER DEFAULT 10;
 
                 DROP VIEW IF EXISTS user_shop_details CASCADE;
 
@@ -300,7 +302,22 @@ export const initDatabase = async () => {
                     FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
                 );
 
+                ALTER TABLE bills ADD COLUMN IF NOT EXISTS table_number TEXT;
                 ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS barcode TEXT;
+
+                CREATE TABLE IF NOT EXISTS restaurant_tables (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    table_number INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT DEFAULT 'AVAILABLE',
+                    current_items TEXT DEFAULT '[]',
+                    total_amount NUMERIC(10,2) DEFAULT 0.00,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CONSTRAINT unique_user_table UNIQUE(user_id, table_number)
+                );
 
                 CREATE TABLE IF NOT EXISTS menu_items (
                     id TEXT PRIMARY KEY,
@@ -462,6 +479,8 @@ export const initDatabase = async () => {
             try { await sqliteRun('ALTER TABLE shops ADD COLUMN tax_rate REAL DEFAULT 18.00'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_template_id TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE shops ADD COLUMN default_discount REAL DEFAULT 0.00'); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE shops ADD COLUMN business_type TEXT DEFAULT 'small_business'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE shops ADD COLUMN table_count INTEGER DEFAULT 10"); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS customers (
@@ -535,6 +554,24 @@ export const initDatabase = async () => {
                     total REAL DEFAULT 0.00,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+
+            try { await sqliteRun('ALTER TABLE bills ADD COLUMN table_number TEXT'); } catch (_) { }
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS restaurant_tables (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    table_number INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT DEFAULT 'AVAILABLE',
+                    current_items TEXT DEFAULT '[]',
+                    total_amount REAL DEFAULT 0.00,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, table_number)
                 )
             `);
 

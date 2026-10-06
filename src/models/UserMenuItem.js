@@ -17,11 +17,12 @@ export default class UserMenuItem {
         this.barcode_type = data.barcode_type || 'INTERNAL';
         this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
         this.is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
+        this.business_type = data.business_type || 'small_business';
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
 
-    static async findByUserId(userId, search = '', category = 'all') {
+    static async findByUserId(userId, search = '', category = 'all', businessType = '') {
         let sql = `
             SELECT 
                 umi.id,
@@ -39,12 +40,18 @@ export default class UserMenuItem {
                 mi.barcode,
                 mi.barcode_type,
                 mi.is_available,
+                mi.business_type,
                 mi.price as catalog_price
             FROM user_menu_items umi
             JOIN menu_items mi ON umi.menu_item_id = mi.id
             WHERE umi.user_id = ?
         `;
         const params = [userId];
+
+        if (businessType && businessType !== 'all' && businessType !== 'All') {
+            sql += ` AND LOWER(mi.business_type) = LOWER(?)`;
+            params.push(businessType.trim());
+        }
 
         if (search && search.trim()) {
             sql += ` AND (LOWER(mi.name) LIKE LOWER(?) OR LOWER(mi.barcode) LIKE LOWER(?))`;

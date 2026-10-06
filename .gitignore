@@ -1,11 +1,25 @@
+# Dependencies
 node_modules/
+
+# Environment and local configurations
 .env
 .env.*
 !.env.example
-.DS_Store
-*.log
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# SQLite Database files (generated dynamically at runtime)
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# SQLite Database files & local runtime data
 data/*.db
 data/*.db-shm
 data/*.db-wal
@@ -13,4 +27,62 @@ data/*.json
 *.db
 *.sqlite
 *.sqlite3
+
+# Temporary, debug, migration-helper & seed scripts
+scripts/
+src/scripts/
+src/scripts/*
+temp/
+tmp/
+seed/
+
+# Explicit one-time and debug script ignores
+check_barcodes.js
+check_clothing_images.js
+inspect_schema_menu_items.js
+inspect_tables.js
+migrate_barcode_menu_items.js
+migrate_user_menu_items.js
+seed_authentic_hotel_items.js
+seed_menu_items_and_bucket.js
+sync_clothing_garments.js
+upload_real_food_images.js
+upload_ui_images.js
+verify_clothing_images.js
+verify_menu_system.js
+src/scripts/check_barcodes.js
+src/scripts/check_clothing_images.js
+src/scripts/inspect_schema_menu_items.js
+src/scripts/inspect_tables.js
+src/scripts/migrate_barcode_menu_items.js
+src/scripts/migrate_user_menu_items.js
+src/scripts/seed_authentic_hotel_items.js
+src/scripts/seed_menu_items_and_bucket.js
+src/scripts/sync_clothing_garments.js
+src/scripts/upload_real_food_images.js
+src/scripts/upload_ui_images.js
+src/scripts/verify_clothing_images.js
+src/scripts/verify_menu_system.js
+
+# Testing & Coverage
+test/
+tests/
+coverage/
+*.test.js
+*.spec.js
+
+# IDE & Editor files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
 

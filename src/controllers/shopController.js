@@ -1,5 +1,5 @@
 import Shop from '../models/Shop.js';
-import { supabase } from '../config/database.js';
+import { query, supabase } from '../config/database.js';
 
 const BUCKET_NAME = 'Shop_Profile';
 
@@ -142,6 +142,22 @@ export const updateShop = async (req, res, next) => {
     if (req.body.default_discount !== undefined) {
       const disc = parseFloat(req.body.default_discount);
       updates.default_discount = isNaN(disc) || disc < 0 ? 0 : disc;
+    }
+
+    if (req.body.business_type !== undefined) {
+      const newBusinessType = String(req.body.business_type).trim();
+      const existingShop = await Shop.findByUserId(req.user.id);
+      if (existingShop && existingShop.business_type !== newBusinessType) {
+        await query('DELETE FROM user_menu_items WHERE user_id = ?', [req.user.id]);
+      }
+      updates.business_type = newBusinessType;
+    }
+
+    if (req.body.table_count !== undefined) {
+      const tCount = Number(req.body.table_count);
+      if (!isNaN(tCount) && tCount >= 1 && tCount <= 200) {
+        updates.table_count = Math.floor(tCount);
+      }
     }
 
     if (req.body.logo_url !== undefined) {
