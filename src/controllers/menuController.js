@@ -1,5 +1,6 @@
 import UserMenuItem from '../models/UserMenuItem.js';
 import MenuItem from '../models/MenuItem.js';
+import Shop from '../models/Shop.js';
 
 /**
  * GET /api/menu
@@ -7,8 +8,14 @@ import MenuItem from '../models/MenuItem.js';
  */
 export const getMenuItems = async (req, res, next) => {
     try {
-        const { search, category } = req.query;
-        const items = await UserMenuItem.findByUserId(req.user.id, search || '', category || 'all');
+        let { search, category, business_type } = req.query;
+        if (!business_type) {
+            const shop = await Shop.findByUserId(req.user.id);
+            if (shop && shop.business_type) {
+                business_type = shop.business_type;
+            }
+        }
+        const items = await UserMenuItem.findByUserId(req.user.id, search || '', category || 'all', business_type || '');
         res.json(items);
     } catch (err) {
         next(err);
@@ -22,8 +29,14 @@ export const getMenuItems = async (req, res, next) => {
  */
 export const getCatalogItems = async (req, res, next) => {
     try {
-        const { search, category } = req.query;
-        const catalog = await MenuItem.findCatalogForUser(req.user.id, search || '', category || 'all');
+        let { search, category, business_type } = req.query;
+        if (!business_type) {
+            const shop = await Shop.findByUserId(req.user.id);
+            if (shop && shop.business_type) {
+                business_type = shop.business_type;
+            }
+        }
+        const catalog = await MenuItem.findCatalogForUser(req.user.id, search || '', category || 'all', business_type || '');
         res.json(catalog);
     } catch (err) {
         next(err);

@@ -16,6 +16,7 @@ import menuRoutes from './src/routes/menuRoutes.js';
 import contactRoutes from './src/routes/contactRoutes.js';
 import subscriptionRoutes from './src/routes/subscriptionRoutes.js';
 import adminRoutes from './src/routes/adminRoutes.js';
+import restaurantRoutes from './src/routes/restaurantRoutes.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 
 dotenv.config();
@@ -95,6 +96,8 @@ app.use('/api/menu', menuRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/restaurant', restaurantRoutes);
+app.use('/api/tables', restaurantRoutes);
 
 // Root & Health check endpoints
 app.get('/', (req, res) => {
@@ -137,10 +140,10 @@ app.get('/api/health', async (req, res) => {
 app.use(errorHandler);
 
 if (!process.env.VERCEL) {
-    app.listen(PORT, () => {
-        console.log(`🚀 Slipzo backend running on http://localhost:${PORT}`);
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Slipzo backend running on http://127.0.0.1:${PORT}`);
         console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
-        console.log(`🔗 API URL: http://localhost:${PORT}/api`);
+        console.log(`🔗 API URL: http://127.0.0.1:${PORT}/api`);
     });
 }
 
