@@ -1,6 +1,6 @@
 import Shop from '../models/Shop.js';
 import UserMenuItem from '../models/UserMenuItem.js';
-import { supabase } from '../config/database.js';
+import { query, supabase } from '../config/database.js';
 
 const BUCKET_NAME = 'Shop_Profile';
 
@@ -152,11 +152,17 @@ export const updateShop = async (req, res, next) => {
       
       const currentShop = await Shop.findByUserId(req.user.id);
       if (currentShop && currentShop.business_type !== newType) {
-        // Business category changed: clear all personal items from user's menu
-        await UserMenuItem.deleteAllByUserId(req.user.id);
+        await query('DELETE FROM user_menu_items WHERE user_id = ?', [req.user.id]);
         console.log(`🧹 Cleared user_menu_items for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
       }
       updates.business_type = newType;
+    }
+
+    if (req.body.table_count !== undefined) {
+      const tCount = Number(req.body.table_count);
+      if (!isNaN(tCount) && tCount >= 1 && tCount <= 200) {
+        updates.table_count = Math.floor(tCount);
+      }
     }
 
     if (req.body.logo_url !== undefined) {

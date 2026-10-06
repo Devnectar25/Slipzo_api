@@ -13,6 +13,7 @@ export default class MenuItem {
         this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
         this.barcode = data.barcode || '';
         this.barcode_type = data.barcode_type || 'INTERNAL';
+        this.business_type = data.business_type || 'small_business';
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
         // Optional user assignment metadata when queried via catalog
@@ -64,7 +65,7 @@ export default class MenuItem {
      * Fetch the Available Master Catalog for a specific user
      * Marks items as `is_added: true` if already in the user's personal menu
      */
-    static async findCatalogForUser(userId, search = '', category = 'all') {
+    static async findCatalogForUser(userId, search = '', category = 'all', businessType = '') {
         let sql = `
             SELECT 
                 mi.id,
@@ -76,6 +77,7 @@ export default class MenuItem {
                 mi.is_available,
                 mi.barcode,
                 mi.barcode_type,
+                mi.business_type,
                 mi.created_at,
                 mi.updated_at,
                 umi.id as user_menu_item_id,
@@ -87,6 +89,11 @@ export default class MenuItem {
             WHERE (mi.is_available IS NOT FALSE)
         `;
         const params = [userId];
+
+        if (businessType && businessType !== 'all' && businessType !== 'All') {
+            sql += ` AND LOWER(mi.business_type) = LOWER(?)`;
+            params.push(businessType.trim());
+        }
 
         if (search && search.trim()) {
             sql += ` AND (LOWER(mi.name) LIKE LOWER(?) OR LOWER(mi.barcode) LIKE LOWER(?))`;

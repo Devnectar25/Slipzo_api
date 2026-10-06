@@ -1,11 +1,25 @@
+# Dependencies
 node_modules/
+
+# Environment and local configurations
 .env
 .env.*
 !.env.example
-.DS_Store
-*.log
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# SQLite Database files (generated dynamically at runtime)
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# SQLite Database files & local runtime data
 data/*.db
 data/*.db-shm
 data/*.db-wal
@@ -18,8 +32,12 @@ data/*.json
 scripts/
 src/scripts/
 src/scripts/*
-test/
+temp/
+tmp/
 seed/
+test/
+tests/
+coverage/
 *.test.js
 *.spec.js
 check_*.js
@@ -29,6 +47,8 @@ inspect_*.js
 deploy_*.js
 fix_*.js
 audit_*.js
+sync_*.js
+verify_*.js
 check_barcodes.js
 inspect_schema_menu_items.js
 migrate_barcode_menu_items.js
@@ -45,6 +65,24 @@ list_kirana_files.js
 test_http_images.js
 test_shop_category_and_barcode.js
 update_hotel_images.js
+check_clothing_images.js
+inspect_tables.js
+seed_authentic_hotel_items.js
+sync_clothing_garments.js
+verify_clothing_images.js
 
+# IDE & Editor files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+Thumbs.db
 
 

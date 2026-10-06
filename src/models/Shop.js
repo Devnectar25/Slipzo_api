@@ -18,6 +18,7 @@ export default class Shop {
         this.default_template_id = data.default_template_id || '';
         this.default_discount = Number(data.default_discount !== undefined ? data.default_discount : 0);
         this.business_type = data.business_type || 'small_business';
+        this.table_count = Number(data.table_count || 10);
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }

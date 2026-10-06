@@ -18,11 +18,12 @@ export default class UserMenuItem {
         this.barcode_active = data.barcode_active !== undefined ? Boolean(data.barcode_active) : true;
         this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
         this.is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
+        this.business_type = data.business_type || 'small_business';
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
 
-    static async findByUserId(userId, search = '', category = 'all') {
+    static async findByUserId(userId, search = '', category = 'all', businessType = '') {
         let sql = `
             SELECT 
                 umi.id,
@@ -34,22 +35,29 @@ export default class UserMenuItem {
                 COALESCE(umi.barcode_active, true) as barcode_active,
                 umi.created_at,
                 umi.updated_at,
-                COALESCE(sb.name, mi.name, cg.name, hf.name, '') as name,
-                COALESCE(sb.category, mi.category, cg.category, hf.category, 'General') as category,
-                COALESCE(sb.image_url, mi.image_url, cg.image_url, hf.image_url, '') as image_url,
-                COALESCE(sb.description, mi.description, cg.description, hf.description, '') as description,
-                COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, '') as barcode,
-                COALESCE(sb.barcode_type, mi.barcode_type, cg.barcode_type, hf.barcode_type, 'INTERNAL') as barcode_type,
-                COALESCE(sb.is_available, mi.is_available, cg.is_available, hf.is_available, true) as is_available,
-                COALESCE(sb.price, mi.price, cg.price, hf.price, 0) as catalog_price
+                COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
+                COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, 'General') as category,
+                COALESCE(sb.image_url, mi.image_url, cg.image_url, hf.image_url, ks.image_url, '') as image_url,
+                COALESCE(sb.description, mi.description, cg.description, hf.description, ks.description, '') as description,
+                COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, ks.barcode, '') as barcode,
+                COALESCE(sb.barcode_type, mi.barcode_type, cg.barcode_type, hf.barcode_type, ks.barcode_type, 'INTERNAL') as barcode_type,
+                COALESCE(sb.is_available, mi.is_available, cg.is_available, hf.is_available, ks.is_available, true) as is_available,
+                COALESCE(sb.business_type, mi.business_type, cg.business_type, hf.business_type, ks.business_type, 'small_business') as business_type,
+                COALESCE(sb.price, mi.price, cg.price, hf.price, ks.price, 0) as catalog_price
             FROM user_menu_items umi
             LEFT JOIN small_business sb ON umi.menu_item_id = sb.id
             LEFT JOIN menu_items mi ON umi.menu_item_id = mi.id
             LEFT JOIN clothing_garments cg ON umi.menu_item_id = cg.id
             LEFT JOIN hotel_food hf ON umi.menu_item_id = hf.id
+            LEFT JOIN kirana_store ks ON umi.menu_item_id = ks.id
             WHERE umi.user_id = ?
         `;
         const params = [userId];
+
+        if (businessType && businessType !== 'all' && businessType !== 'All') {
+            sql += ` AND LOWER(mi.business_type) = LOWER(?)`;
+            params.push(businessType.trim());
+        }
 
         if (search && search.trim()) {
             sql += ` AND (

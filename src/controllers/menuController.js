@@ -73,8 +73,14 @@ async function uploadCustomProductImage(rawData, itemName, userId) {
  */
 export const getMenuItems = async (req, res, next) => {
     try {
-        const { search, category } = req.query;
-        const items = await UserMenuItem.findByUserId(req.user.id, search || '', category || 'all');
+        let { search, category, business_type } = req.query;
+        if (!business_type) {
+            const shop = await Shop.findByUserId(req.user.id);
+            if (shop && shop.business_type) {
+                business_type = shop.business_type;
+            }
+        }
+        const items = await UserMenuItem.findByUserId(req.user.id, search || '', category || 'all', business_type || '');
         res.json(items);
     } catch (err) {
         next(err);
