@@ -168,6 +168,13 @@ export default class MenuItem {
         const isAvailable = itemData.is_available !== undefined ? Boolean(itemData.is_available) : true;
         const now = new Date().toISOString();
 
+        const existingName = await queryOne('SELECT id FROM menu_items WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]);
+        if (existingName) {
+            const err = new Error(`Item with name "${name}" already exists.`);
+            err.statusCode = 400;
+            throw err;
+        }
+
         let barcode = (itemData.barcode || '').trim();
         let barcodeType = (itemData.barcode_type || 'INTERNAL').trim().toUpperCase();
 

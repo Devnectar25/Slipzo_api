@@ -10,7 +10,7 @@ export default class Catalog {
             case 'kirana_grocery':
             case 'kirana':
             case 'grocery':
-                return 'menu_items';
+                return 'kirana_store';
             case 'clothing_garments':
             case 'clothing':
             case 'garments':
@@ -42,12 +42,12 @@ export default class Catalog {
                 cat.is_available,
                 cat.barcode,
                 cat.barcode_type,
-                COALESCE(cat.barcode_active, true) as barcode_active,
+                cat.barcode_active,
                 cat.created_at,
                 cat.updated_at,
                 umi.id as user_menu_item_id,
                 umi.custom_price as user_price,
-                COALESCE(umi.barcode_active, true) as user_barcode_active,
+                umi.barcode_active as user_barcode_active,
                 CASE WHEN umi.id IS NOT NULL THEN true ELSE false END as is_added,
                 '${businessType}' as business_type
             FROM ${tableName} cat
@@ -69,6 +69,13 @@ export default class Catalog {
 
         sql += ` ORDER BY cat.barcode ASC, cat.name ASC`;
 
+        const isDefaultBActive = !(
+            businessType.toLowerCase().includes('small_business') || 
+            businessType.toLowerCase().includes('hotel') || 
+            businessType.toLowerCase().includes('food') || 
+            businessType.toLowerCase().includes('cafe')
+        );
+
         const rows = await query(sql, params);
         return (rows || []).map(r => ({
             id: r.id,
@@ -80,7 +87,9 @@ export default class Catalog {
             is_available: r.is_available !== undefined ? Boolean(r.is_available) : true,
             barcode: r.barcode || '',
             barcode_type: r.barcode_type || 'INTERNAL',
-            barcode_active: r.user_barcode_active !== undefined ? Boolean(r.user_barcode_active) : (r.barcode_active !== undefined ? Boolean(r.barcode_active) : true),
+            barcode_active: r.user_barcode_active !== null && r.user_barcode_active !== undefined 
+                ? Boolean(r.user_barcode_active) 
+                : (r.barcode_active !== null && r.barcode_active !== undefined ? Boolean(r.barcode_active) : isDefaultBActive),
             is_added: Boolean(r.is_added),
             user_menu_item_id: r.user_menu_item_id || null,
             user_price: r.user_price !== undefined && r.user_price !== null ? Number(r.user_price) : null,
@@ -95,7 +104,7 @@ export default class Catalog {
         if (!barcode || !String(barcode).trim()) return null;
         const clean = String(barcode).trim();
 
-        const tables = ['small_business', 'menu_items', 'clothing_garments', 'hotel_food'];
+        const tables = ['small_business', 'menu_items', 'clothing_garments', 'hotel_food', 'kirana_store'];
         for (const table of tables) {
             const sql = `SELECT * FROM ${table} WHERE LOWER(barcode) = LOWER(?) LIMIT 1`;
             const row = await queryOne(sql, [clean]);

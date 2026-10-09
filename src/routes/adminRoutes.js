@@ -1,7 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
-import { query, queryOne } from '../config/database.js';
+import { query, queryOne, supabase } from '../config/database.js';
 import ContactSubmission from '../models/ContactSubmission.js';
 import MenuItem from '../models/MenuItem.js';
 
@@ -349,9 +349,9 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
         }
 
         const cleanName = name.trim();
-        const existingProd = await queryOne(`SELECT * FROM products WHERE LOWER(name) = ?`, [cleanName.toLowerCase()]);
+        const existingProd = await queryOne(`SELECT id, name FROM products WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))`, [cleanName]);
         if (existingProd) {
-            return res.status(200).json({ detail: 'Product already exists in catalog', product: existingProd });
+            return res.status(400).json({ detail: `A product with name "${cleanName}" already exists.` });
         }
 
         let photoList = [];
@@ -380,10 +380,85 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
         }
         const userId = adminUser.id;
 
-        const mainImage = photoList[0] || image || '';
-        const imagesJson = JSON.stringify(photoList);
-        const prodStatus = (status || 'active').toLowerCase().trim();
+        // Process base64 photos and upload directly to Supabase Storage
+        const processedPhotoUrls = [];
+        for (let idx = 0; idx < photoList.length; idx++) {
+            const rawImg = photoList[idx];
+            if (typeof rawImg === 'string' && rawImg.startsWith('data:image/')) {
+                try {
+                    const matches = rawImg.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+                    if (matches) {
+                        const contentType = matches[1];
+                        const base64Data = matches[2];
+                        const buffer = Buffer.from(base64Data, 'base64');
+                        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                        const fileName = `products/${slug}-${Date.now()}-${idx}.jpg`;
 
+                        const { error: uploadError } = await supabase.storage
+                            .from('menu-item-images')
+                            .upload(fileName, buffer, { contentType, upsert: true });
+
+                        if (!uploadError) {
+                            const publicUrl = supabase.storage.from('menu-item-images').getPublicUrl(fileName).data.publicUrl;
+                            processedPhotoUrls.push(publicUrl);
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('⚠️ Supabase image upload fallback:', e.message);
+                }
+            }
+            processedPhotoUrls.push(rawImg);
+        }
+
+        const mainImage = processedPhotoUrls[0] || image || '';
+        const imagesJson = JSON.stringify(processedPhotoUrls);
+        const prodStatus = (status || 'active').toLowerCase().trim();
+        const catLower = (category || '').toLowerCase().trim();
+
+        // Route to category-specific database table
+        try {
+            if (catLower.includes('kirana') || catLower.includes('grocery')) {
+                const barcode = `SLP-${Math.floor(100000 + Math.random() * 900000)}`;
+                await query(
+                    `INSERT INTO menu_items (id, barcode, name, category, price, image_url, description, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [id, barcode, name.trim(), category.trim(), parseFloat(price) || 0, mainImage, name.trim(), now, now]
+                );
+                try {
+                    await query(
+                        `INSERT INTO kirana_store (id, original_product_id, barcode, name, category, shop_category, price, image_url, description, status, created_at, updated_at)
+                         VALUES (?, ?, ?, ?, ?, 'Kirana', ?, ?, ?, 'active', ?, ?)`,
+                        [id, id, barcode, name.trim(), category.trim(), parseFloat(price) || 0, mainImage, name.trim(), now, now]
+                    );
+                } catch (kErr) {
+                    console.warn('⚠️ kirana_store insert error:', kErr.message);
+                }
+            } else if (catLower.includes('hotel') || catLower.includes('restaurant')) {
+                await query(
+                    `INSERT INTO hotel_food (id, name, category, price, image_url, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [id, name.trim(), category.trim(), parseFloat(price) || 0, mainImage, now, now]
+                );
+            } else if (catLower.includes('clothing') || catLower.includes('garment')) {
+                const barcode = `CLO-${Math.floor(100000 + Math.random() * 900000)}`;
+                await query(
+                    `INSERT INTO clothing_garments (id, barcode, name, category, price, image_url, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [id, barcode, name.trim(), category.trim(), parseFloat(price) || 0, mainImage, now, now]
+                );
+            } else if (catLower.includes('small') || catLower.includes('business') || catLower.includes('cafe')) {
+                await query(
+                    `INSERT INTO small_business (id, name, category, price, image_url, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [id, name.trim(), category.trim(), parseFloat(price) || 0, mainImage, now, now]
+                );
+            }
+        } catch (catErr) {
+            console.warn('⚠️ Category table insert notice:', catErr.message);
+        }
+
+        // Master products database table insert
         await query(
             `INSERT INTO products (id, user_id, name, price, category, product_link, stock, image, images, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -393,7 +468,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
                 name.trim(),
                 parseFloat(price) || 0,
                 category ? category.trim() : 'General',
-                parseFloat(tax_rate) || 0,
+                cleanLink,
                 100,
                 mainImage,
                 imagesJson,
@@ -415,7 +490,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, name, price, category, tax_rate, stock } = req.body;
+        const { status, name, price, category, product_link, tax_rate, stock, image } = req.body;
 
         let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
         if (!existing && name) {
@@ -431,12 +506,13 @@ router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
         const newPrice = price !== undefined ? parseFloat(price) : existing.price;
         const newCat = category !== undefined ? category.trim() : existing.category;
         const newLink = product_link !== undefined ? (product_link ? product_link.trim() : '') : (existing.product_link || '');
+        const newImage = image !== undefined ? (image ? image.trim() : '') : (existing.image || '');
         const newStock = stock !== undefined ? parseInt(stock) : existing.stock;
         const now = new Date().toISOString();
 
         await query(
-            `UPDATE products SET name = ?, price = ?, category = ?, product_link = ?, stock = ?, status = ?, updated_at = ? WHERE id = ?`,
-            [newName, newPrice, newCat, newLink, newStock, newStatus, now, targetId]
+            `UPDATE products SET name = ?, price = ?, category = ?, product_link = ?, stock = ?, image = ?, status = ?, updated_at = ? WHERE id = ?`,
+            [newName, newPrice, newCat, newLink, newStock, newImage, newStatus, now, targetId]
         );
 
         const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
@@ -557,6 +633,42 @@ router.get('/menu', adminAuthMiddleware, async (req, res) => {
     }
 });
 
+// Helper to process base64 image upload to Supabase Storage
+async function processMasterItemImage(rawImg, name) {
+    if (!rawImg || typeof rawImg !== 'string' || !rawImg.trim()) return '';
+    const cleanImg = rawImg.trim();
+    if (cleanImg.startsWith('http://') || cleanImg.startsWith('https://')) return cleanImg;
+
+    if (cleanImg.startsWith('data:image/')) {
+        try {
+            const matches = cleanImg.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+            if (matches) {
+                const contentType = matches[1];
+                const base64Data = matches[2];
+                const buffer = Buffer.from(base64Data, 'base64');
+                let ext = 'jpg';
+                if (contentType.includes('png')) ext = 'png';
+                else if (contentType.includes('webp')) ext = 'webp';
+
+                const safeName = (name || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                const fileName = `admin/${safeName}-${Date.now()}.${ext}`;
+
+                const { error: uploadError } = await supabase.storage
+                    .from('menu-item-images')
+                    .upload(fileName, buffer, { contentType, upsert: true });
+
+                if (!uploadError) {
+                    const publicUrl = supabase.storage.from('menu-item-images').getPublicUrl(fileName).data.publicUrl;
+                    return publicUrl;
+                }
+            }
+        } catch (err) {
+            console.warn('⚠️ Base64 image upload error:', err.message);
+        }
+    }
+    return cleanImg;
+}
+
 // Create New Master Menu Item
 router.post('/menu', adminAuthMiddleware, async (req, res) => {
     try {
@@ -571,11 +683,13 @@ router.post('/menu', adminAuthMiddleware, async (req, res) => {
             return res.status(400).json({ detail: 'Base price must be a non-negative number' });
         }
 
+        const finalImageUrl = await processMasterItemImage(image_url, name);
+
         const item = await MenuItem.createMaster({
             name: name.trim(),
             price: numPrice,
             category: (category || '').trim() || 'General',
-            image_url: image_url || '',
+            image_url: finalImageUrl || '',
             description: (description || '').trim(),
             is_available: is_available !== undefined ? Boolean(is_available) : true,
             barcode: barcode ? String(barcode).trim() : undefined,
@@ -606,7 +720,13 @@ router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
             }
         }
 
-        const updated = await MenuItem.updateMaster(id, req.body);
+        let updatePayload = { ...req.body };
+        if (image_url !== undefined) {
+            const targetName = name || 'item';
+            updatePayload.image_url = await processMasterItemImage(image_url, targetName);
+        }
+
+        const updated = await MenuItem.updateMaster(id, updatePayload);
         if (!updated) {
             return res.status(404).json({ detail: 'Master menu item not found' });
         }

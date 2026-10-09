@@ -286,11 +286,38 @@ export const initDatabase = async () => {
                     subtotal NUMERIC(10,2) DEFAULT 0.00,
                     tax_amount NUMERIC(10,2) DEFAULT 0.00,
                     total NUMERIC(10,2) DEFAULT 0.00,
+                    is_saved INTEGER DEFAULT 1,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
-                CREATE TABLE IF NOT EXISTS bill_items (
+                ALTER TABLE bills ADD COLUMN IF NOT EXISTS is_saved INTEGER DEFAULT 1;
+
+                CREATE TABLE IF NOT EXISTS saved_bills (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    template_id TEXT NOT NULL,
+                    customer_id TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    table_number TEXT,
+                    number TEXT UNIQUE NOT NULL,
+                    discount NUMERIC(10,2) DEFAULT 0.00,
+                    tax_rate NUMERIC(5,2) DEFAULT 0.00,
+                    payment_mode TEXT DEFAULT 'Cash',
+                    shop_name TEXT NOT NULL,
+                    shop_address TEXT,
+                    shop_phone TEXT,
+                    template_name TEXT,
+                    template_width TEXT DEFAULT '58mm',
+                    subtotal NUMERIC(10,2) DEFAULT 0.00,
+                    tax_amount NUMERIC(10,2) DEFAULT 0.00,
+                    total NUMERIC(10,2) DEFAULT 0.00,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS saved_bill_items (
                     id TEXT PRIMARY KEY,
                     bill_id TEXT NOT NULL,
                     name TEXT NOT NULL,
@@ -299,11 +326,51 @@ export const initDatabase = async () => {
                     rate NUMERIC(10,2) NOT NULL DEFAULT 0.00,
                     amount NUMERIC(10,2) DEFAULT 0.00,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+                    FOREIGN KEY (bill_id) REFERENCES saved_bills(id) ON DELETE CASCADE
                 );
 
                 ALTER TABLE bills ADD COLUMN IF NOT EXISTS table_number TEXT;
+                ALTER TABLE saved_bills ADD COLUMN IF NOT EXISTS table_number TEXT;
+                ALTER TABLE print_bills ADD COLUMN IF NOT EXISTS table_number TEXT;
                 ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS barcode TEXT;
+                ALTER TABLE saved_bill_items ADD COLUMN IF NOT EXISTS barcode TEXT;
+                ALTER TABLE print_bill_items ADD COLUMN IF NOT EXISTS barcode TEXT;
+
+                CREATE TABLE IF NOT EXISTS print_bills (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    template_id TEXT NOT NULL,
+                    customer_id TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    table_number TEXT,
+                    number TEXT NOT NULL,
+                    discount NUMERIC(10,2) DEFAULT 0.00,
+                    tax_rate NUMERIC(5,2) DEFAULT 0.00,
+                    payment_mode TEXT DEFAULT 'Cash',
+                    shop_name TEXT NOT NULL,
+                    shop_address TEXT,
+                    shop_phone TEXT,
+                    template_name TEXT,
+                    template_width TEXT DEFAULT '58mm',
+                    subtotal NUMERIC(10,2) DEFAULT 0.00,
+                    tax_amount NUMERIC(10,2) DEFAULT 0.00,
+                    total NUMERIC(10,2) DEFAULT 0.00,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS print_bill_items (
+                    id TEXT PRIMARY KEY,
+                    bill_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    barcode TEXT,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    rate NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    amount NUMERIC(10,2) DEFAULT 0.00,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (bill_id) REFERENCES print_bills(id) ON DELETE CASCADE
+                );
 
                 CREATE TABLE IF NOT EXISTS restaurant_tables (
                     id TEXT PRIMARY KEY,
@@ -352,12 +419,23 @@ export const initDatabase = async () => {
                     CONSTRAINT unique_user_menu_item UNIQUE (user_id, menu_item_id)
                 );
 
-                try {
-                    await pgPool.query('ALTER TABLE user_menu_items DROP CONSTRAINT IF EXISTS user_menu_items_menu_item_id_fkey;');
-                } catch (_) { }
+                ALTER TABLE user_menu_items DROP CONSTRAINT IF EXISTS user_menu_items_menu_item_id_fkey;
 
-                CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id);
-                CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id);
+                CREATE TABLE IF NOT EXISTS kirana_store (
+                    id TEXT PRIMARY KEY,
+                    original_product_id TEXT,
+                    barcode TEXT,
+                    name TEXT NOT NULL,
+                    category TEXT DEFAULT 'General',
+                    shop_category TEXT DEFAULT 'Kirana',
+                    price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                    image_url TEXT,
+                    description TEXT,
+                    status TEXT DEFAULT 'active',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_kirana_store_barcode ON kirana_store(barcode);
 
                 CREATE TABLE IF NOT EXISTS small_business (
                     id TEXT PRIMARY KEY,
@@ -562,6 +640,7 @@ export const initDatabase = async () => {
             try { await sqliteRun('ALTER TABLE templates ADD COLUMN accent_color TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE templates ADD COLUMN features TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE templates ADD COLUMN is_builtin INTEGER DEFAULT 0'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE bills ADD COLUMN is_saved INTEGER DEFAULT 1'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS bills (
@@ -583,12 +662,41 @@ export const initDatabase = async () => {
                     subtotal REAL DEFAULT 0.00,
                     tax_amount REAL DEFAULT 0.00,
                     total REAL DEFAULT 0.00,
+                    is_saved INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS saved_bills (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    template_id TEXT NOT NULL,
+                    customer_id TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    table_number TEXT,
+                    number TEXT UNIQUE NOT NULL,
+                    discount REAL DEFAULT 0.00,
+                    tax_rate REAL DEFAULT 0.00,
+                    payment_mode TEXT DEFAULT 'Cash',
+                    shop_name TEXT NOT NULL,
+                    shop_address TEXT,
+                    shop_phone TEXT,
+                    template_name TEXT,
+                    template_width TEXT DEFAULT '58mm',
+                    subtotal REAL DEFAULT 0.00,
+                    tax_amount REAL DEFAULT 0.00,
+                    total REAL DEFAULT 0.00,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             `);
 
             try { await sqliteRun('ALTER TABLE bills ADD COLUMN table_number TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE saved_bills ADD COLUMN table_number TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE print_bills ADD COLUMN table_number TEXT'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS restaurant_tables (
@@ -607,17 +715,60 @@ export const initDatabase = async () => {
             `);
 
             await sqliteRun(`
-                CREATE TABLE IF NOT EXISTS bill_items (
+                CREATE TABLE IF NOT EXISTS saved_bill_items (
                     id TEXT PRIMARY KEY,
                     bill_id TEXT NOT NULL,
                     name TEXT NOT NULL,
+                    barcode TEXT,
                     quantity INTEGER NOT NULL DEFAULT 1,
                     rate REAL NOT NULL DEFAULT 0.00,
                     amount REAL DEFAULT 0.00,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+                    FOREIGN KEY (bill_id) REFERENCES saved_bills(id) ON DELETE CASCADE
                 )
             `);
+            try { await sqliteRun('ALTER TABLE saved_bill_items ADD COLUMN barcode TEXT'); } catch (_) { }
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS print_bills (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    template_id TEXT NOT NULL,
+                    customer_id TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    table_number TEXT,
+                    number TEXT NOT NULL,
+                    discount REAL DEFAULT 0.00,
+                    tax_rate REAL DEFAULT 0.00,
+                    payment_mode TEXT DEFAULT 'Cash',
+                    shop_name TEXT NOT NULL,
+                    shop_address TEXT,
+                    shop_phone TEXT,
+                    template_name TEXT,
+                    template_width TEXT DEFAULT '58mm',
+                    subtotal REAL DEFAULT 0.00,
+                    tax_amount REAL DEFAULT 0.00,
+                    total REAL DEFAULT 0.00,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            `);
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS print_bill_items (
+                    id TEXT PRIMARY KEY,
+                    bill_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    barcode TEXT,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    rate REAL NOT NULL DEFAULT 0.00,
+                    amount REAL DEFAULT 0.00,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (bill_id) REFERENCES print_bills(id) ON DELETE CASCADE
+                )
+            `);
+            try { await sqliteRun('ALTER TABLE print_bill_items ADD COLUMN barcode TEXT'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS products (
@@ -680,6 +831,24 @@ export const initDatabase = async () => {
             `);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_user_id ON user_menu_items(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_user_menu_items_menu_item_id ON user_menu_items(menu_item_id)`);
+
+            await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS kirana_store (
+                    id TEXT PRIMARY KEY,
+                    original_product_id TEXT,
+                    barcode TEXT,
+                    name TEXT NOT NULL,
+                    category TEXT DEFAULT 'General',
+                    shop_category TEXT DEFAULT 'Kirana',
+                    price REAL NOT NULL DEFAULT 0.00,
+                    image_url TEXT,
+                    description TEXT,
+                    status TEXT DEFAULT 'active',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_kirana_store_barcode ON kirana_store(barcode)`);
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS small_business (

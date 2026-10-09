@@ -46,7 +46,8 @@ export const generateBillNumber = (prefix = 'SLP', sequence = null, format = 'PR
 
 export const calculateBillTotals = (items, discount = 0, taxRate = 0) => {
     const subtotal = items.reduce((sum, item) => {
-        return sum + (Number(item.quantity) || 0) * (Number(item.rate) || 0);
+        const rate = Number(item.rate !== undefined && item.rate !== null ? item.rate : (item.price !== undefined && item.price !== null ? item.price : item.custom_price)) || 0;
+        return sum + (Number(item.quantity) || 0) * rate;
     }, 0);
     
     const discountAmount = Number(discount) || 0;

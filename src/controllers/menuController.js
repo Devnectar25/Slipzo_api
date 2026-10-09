@@ -3,15 +3,53 @@ import SmallBusiness from '../models/SmallBusiness.js';
 import MenuItem from '../models/MenuItem.js';
 import Shop from '../models/Shop.js';
 import Catalog from '../models/Catalog.js';
-import { supabase } from '../config/database.js';
+import { supabase, insert, query, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
 
-const ITEM_BUCKET = 'menu-item-images';
+/**
+ * Maps category selection string to the appropriate database table and Supabase storage bucket
+ */
+function getCategoryTableAndBucket(categoryInput) {
+  const cat = String(categoryInput || '').toLowerCase().trim();
+
+  if (cat.includes('hotel') || cat.includes('restaurant') || cat.includes('food')) {
+    return {
+      tableName: 'hotel_food',
+      bucketName: 'hotel_food'
+    };
+  }
+
+  if (cat.includes('cloth') || cat.includes('garment') || cat.includes('apparel')) {
+    return {
+      tableName: 'clothing_garments',
+      bucketName: 'clothing_garments'
+    };
+  }
+
+  if (cat.includes('kirana') || cat.includes('grocery')) {
+    return {
+      tableName: 'kirana_store',
+      bucketName: 'kirana_store'
+    };
+  }
+
+  if (cat.includes('small') || cat.includes('cafe') || cat.includes('tea') || cat.includes('business')) {
+    return {
+      tableName: 'small_business',
+      bucketName: 'small_business'
+    };
+  }
+
+  return {
+    tableName: 'small_business',
+    bucketName: 'menu-item-images'
+  };
+}
 
 /**
- * Uploads a custom product image to Supabase Storage
+ * Uploads a custom product image to Supabase Storage in the specified category bucket
  */
-async function uploadCustomProductImage(rawData, itemName, userId) {
+async function uploadCustomProductImage(rawData, itemName, userId, targetBucket = 'menu-item-images') {
   try {
     if (!rawData || !String(rawData).trim()) return '';
     const cleanStr = String(rawData).trim();
@@ -44,20 +82,31 @@ async function uploadCustomProductImage(rawData, itemName, userId) {
 
     const fileName = `custom/${userId}_${safeName}_${Date.now()}.${ext}`;
 
+    // Upload to designated category bucket
     const { error: uploadError } = await supabase.storage
-      .from(ITEM_BUCKET)
+      .from(targetBucket)
       .upload(fileName, buffer, {
         contentType: mimeType,
         upsert: true
       });
 
     if (uploadError) {
-      console.warn('⚠️ Supabase custom image upload warning:', uploadError.message);
+      console.warn(`⚠️ Supabase custom image upload warning for bucket '${targetBucket}':`, uploadError.message);
+      // Fallback attempt to default 'menu-item-images' bucket if primary category bucket doesn't exist
+      if (targetBucket !== 'menu-item-images') {
+        const { error: fallbackErr } = await supabase.storage
+          .from('menu-item-images')
+          .upload(fileName, buffer, { contentType: mimeType, upsert: true });
+        if (!fallbackErr) {
+          const { data: fallbackUrlData } = supabase.storage.from('menu-item-images').getPublicUrl(fileName);
+          return fallbackUrlData?.publicUrl || cleanStr;
+        }
+      }
       return cleanStr;
     }
 
     const { data: urlData } = supabase.storage
-      .from(ITEM_BUCKET)
+      .from(targetBucket)
       .getPublicUrl(fileName);
 
     return urlData?.publicUrl || cleanStr;
@@ -140,7 +189,16 @@ export const createMenuItem = async (req, res, next) => {
 
         let targetMenuItemId = menu_item_id;
         const numericPrice = parseFloat(custom_price !== undefined ? custom_price : price);
-        const isBActive = barcode_active !== undefined ? Boolean(barcode_active) : true;
+
+        let defaultBarcodeActive = true;
+        if (barcode_active === undefined) {
+            const userShop = await Shop.findByUserId(req.user.id);
+            const bType = (userShop?.business_type || '').toLowerCase();
+            if (bType.includes('small_business') || bType.includes('hotel') || bType.includes('food') || bType.includes('cafe')) {
+                defaultBarcodeActive = false;
+            }
+        }
+        const isBActive = barcode_active !== undefined ? Boolean(barcode_active) : defaultBarcodeActive;
 
         if (price === undefined && custom_price === undefined) {
             return res.status(400).json({ detail: 'Selling price is required' });
@@ -150,30 +208,92 @@ export const createMenuItem = async (req, res, next) => {
             return res.status(400).json({ detail: 'Selling price must be a non-negative number' });
         }
 
-        // If no menu_item_id provided, create a custom master item first
+        // Determine item name to check for duplicate product names
+        let checkName = (name && String(name).trim()) ? String(name).trim() : '';
+        if (!checkName && targetMenuItemId) {
+            const catItem = await Catalog.findByBarcode(targetMenuItemId) || 
+                            await queryOne(
+                                `SELECT name FROM small_business WHERE id = ? 
+                                 UNION SELECT name FROM kirana_store WHERE id = ? 
+                                 UNION SELECT name FROM clothing_garments WHERE id = ? 
+                                 UNION SELECT name FROM hotel_food WHERE id = ? 
+                                 UNION SELECT name FROM menu_items WHERE id = ? LIMIT 1`, 
+                                [targetMenuItemId, targetMenuItemId, targetMenuItemId, targetMenuItemId, targetMenuItemId]
+                            );
+            if (catItem && catItem.name) {
+                checkName = catItem.name.trim();
+            }
+        }
+
+        // Check if user already has an item with the same name in their personal menu
+        if (checkName) {
+            const userExisting = await queryOne(`
+                SELECT umi.id, COALESCE(sb.name, ks.name, cg.name, hf.name, mi.name, '') as name
+                FROM user_menu_items umi
+                LEFT JOIN small_business sb ON umi.menu_item_id = sb.id
+                LEFT JOIN kirana_store ks ON umi.menu_item_id = ks.id
+                LEFT JOIN clothing_garments cg ON umi.menu_item_id = cg.id
+                LEFT JOIN hotel_food hf ON umi.menu_item_id = hf.id
+                LEFT JOIN menu_items mi ON umi.menu_item_id = mi.id
+                WHERE umi.user_id = ? AND LOWER(TRIM(COALESCE(sb.name, ks.name, cg.name, hf.name, mi.name, ''))) = LOWER(TRIM(?))
+                LIMIT 1
+            `, [req.user.id, checkName]);
+
+            if (userExisting) {
+                return res.status(400).json({ detail: `Product "${checkName}" is already in your menu` });
+            }
+        }
+
+        // If no menu_item_id provided, create a custom master item first in the corresponding category table & bucket
         if (!targetMenuItemId) {
             if (!name || !name.trim()) {
                 return res.status(400).json({ detail: 'Item name is required' });
             }
 
+            const { tableName, bucketName } = getCategoryTableAndBucket(category);
+
+            // Prevent adding custom item with duplicate name in the catalog table
+            const catalogNameCheck = await queryOne(
+                `SELECT id, name FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`,
+                [name.trim()]
+            );
+            if (catalogNameCheck) {
+                return res.status(400).json({ detail: `Product "${name.trim()}" already exists in the catalog. You can add it directly.` });
+            }
+
             let finalImageUrl = image_url ? String(image_url).trim() : '';
             if (finalImageUrl && (finalImageUrl.startsWith('data:') || (finalImageUrl.length > 500 && !finalImageUrl.startsWith('http')))) {
-                finalImageUrl = await uploadCustomProductImage(finalImageUrl, name, req.user.id);
+                finalImageUrl = await uploadCustomProductImage(finalImageUrl, name, req.user.id, bucketName);
             }
 
             const customBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : `CUST-${Date.now().toString().slice(-6)}`;
+            const newItemId = uuidv4();
+            const now = new Date().toISOString();
 
-            const masterItem = await SmallBusiness.create({
+            const masterItemData = {
+                id: newItemId,
                 user_id: req.user.id,
                 name: name.trim(),
                 price: numericPrice,
                 category: (category || '').trim() || 'General',
                 image_url: finalImageUrl || '',
                 description: (description || '').trim(),
+                is_available: true,
                 barcode: customBarcode,
-                barcode_active: isBActive
-            });
-            targetMenuItemId = masterItem.id;
+                barcode_type: 'INTERNAL',
+                created_at: now,
+                updated_at: now
+            };
+
+            // Save record into the target category database table
+            try {
+                await insert(tableName, masterItemData);
+            } catch (tblErr) {
+                console.warn(`⚠️ Insert into table '${tableName}' warning:`, tblErr.message);
+                await insert('small_business', masterItemData).catch(() => null);
+            }
+
+            targetMenuItemId = newItemId;
         }
 
         // Add to user_menu_items
