@@ -165,6 +165,12 @@ export const updateShop = async (req, res, next) => {
       }
     }
 
+    if (req.body.staff_emails !== undefined) {
+      updates.staff_emails = Array.isArray(req.body.staff_emails)
+        ? JSON.stringify(req.body.staff_emails)
+        : String(req.body.staff_emails).trim();
+    }
+
     if (req.body.logo_url !== undefined) {
       const logoInput = req.body.logo_url ? String(req.body.logo_url).trim() : '';
       if (!logoInput) {

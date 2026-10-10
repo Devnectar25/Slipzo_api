@@ -61,15 +61,15 @@ export default class UserMenuItem {
 
         if (search && search.trim()) {
             sql += ` AND (
-                LOWER(COALESCE(sb.name, mi.name, cg.name, hf.name, '')) LIKE LOWER(?) OR 
-                LOWER(COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, '')) LIKE LOWER(?) OR 
-                LOWER(COALESCE(sb.category, mi.category, cg.category, hf.category, '')) LIKE LOWER(?)
+                LOWER(COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '')) LIKE LOWER(?) OR 
+                LOWER(COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, ks.barcode, '')) LIKE LOWER(?) OR 
+                LOWER(COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, '')) LIKE LOWER(?)
             )`;
             params.push(`%${search.trim()}%`, `%${search.trim()}%`, `%${search.trim()}%`);
         }
 
         if (category && category !== 'all' && category !== 'All') {
-            sql += ` AND LOWER(COALESCE(sb.category, mi.category, cg.category, hf.category, 'General')) = LOWER(?)`;
+            sql += ` AND LOWER(COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, 'General')) = LOWER(?)`;
             params.push(category.trim());
         }
 

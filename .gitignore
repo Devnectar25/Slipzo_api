@@ -1,5 +1,8 @@
-# Dependencies
+# Dependencies and build outputs
 node_modules/
+dist/
+build/
+.cache/
 
 # Environment and local configurations
 .env
@@ -9,6 +12,7 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+local.properties
 
 # Logs
 logs/
@@ -132,5 +136,10 @@ image-report.md
 # OS generated files
 .DS_Store
 Thumbs.db
+desktop.ini
+ehthumbs.db
+*.bak
+*.old
+*.orig
 
 

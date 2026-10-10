@@ -31,7 +31,7 @@ class Subscription {
       id,
       validUserId || 'system',
       user_name || 'Paid User',
-      user_email || 'user@slipzo.com',
+      user_email || 'user@slipzen.com',
       plan_name || 'Pro Plan',
       parseFloat(amount || 0),
       parseInt(prints_count || 0),
