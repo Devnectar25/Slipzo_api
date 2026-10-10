@@ -2,6 +2,7 @@ import Bill from '../models/Bill.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
+import RestaurantTable from '../models/RestaurantTable.js';
 
 export const getBills = async (req, res, next) => {
     try {
@@ -159,6 +160,13 @@ export const createBill = async (req, res, next) => {
             shop
         });
 
+        const rawTableId = table_number || table || table_name || '';
+        if (!is_saved && rawTableId) {
+            try {
+                await RestaurantTable.resetTable(req.user.id, rawTableId);
+            } catch (_) {}
+        }
+
         // Fetch updated quota after successful bill insertion
         const updatedQuota = await Subscription.getQuotaByUserId(req.user.id);
         
@@ -253,8 +261,18 @@ export const getBillStats = async (req, res) => {
 export const markBillAsPrinted = async (req, res, next) => {
     try {
         const { id } = req.params;
+        const bill = await Bill.findByIdAndUser(id, req.user.id);
+        const tableNum = bill?.table_number || bill?.table;
+
         await Bill.markAsPrinted(id, req.user.id);
-        res.json({ message: 'Bill marked as printed', success: true, id });
+
+        if (tableNum) {
+            try {
+                await RestaurantTable.resetTable(req.user.id, tableNum);
+            } catch (e) {}
+        }
+
+        res.json({ message: 'Bill marked as printed', success: true, id, table_number: tableNum });
     } catch (err) {
         next(err);
     }
@@ -264,7 +282,12 @@ export const markTableBillsAsPrinted = async (req, res, next) => {
     try {
         const { tableNumber } = req.params;
         const count = await Bill.markTableAsPrinted(tableNumber, req.user.id);
-        res.json({ message: 'Table bills marked as printed', success: true, count });
+        if (tableNumber) {
+            try {
+                await RestaurantTable.resetTable(req.user.id, tableNumber);
+            } catch (e) {}
+        }
+        res.json({ message: 'Table bills marked as printed', success: true, count, table_number: tableNumber });
     } catch (err) {
         next(err);
     }

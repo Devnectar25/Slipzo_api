@@ -1,5 +1,6 @@
 import Shop from '../models/Shop.js';
 import UserMenuItem from '../models/UserMenuItem.js';
+import RestaurantTable from '../models/RestaurantTable.js';
 import { query, supabase } from '../config/database.js';
 
 const BUCKET_NAME = 'Shop_Profile';
@@ -154,6 +155,13 @@ export const updateShop = async (req, res, next) => {
       if (currentShop && currentShop.business_type !== newType) {
         await query('DELETE FROM user_menu_items WHERE user_id = ?', [req.user.id]);
         console.log(`🧹 Cleared user_menu_items for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
+
+        try {
+          await RestaurantTable.resetAllTables(req.user.id);
+          console.log(`🧹 Reset all restaurant_tables for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
+        } catch (tableErr) {
+          console.error(`Failed to reset restaurant_tables on category switch:`, tableErr);
+        }
       }
       updates.business_type = newType;
     }

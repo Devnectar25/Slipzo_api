@@ -145,6 +145,15 @@ export default class RestaurantTable {
         });
     }
 
+    static async resetAllTables(userId) {
+        if (!userId) return [];
+        await query(
+            "UPDATE restaurant_tables SET status = 'AVAILABLE', current_items = '[]', total_amount = 0.00, updated_at = ? WHERE user_id = ?",
+            [new Date().toISOString(), userId]
+        );
+        return await this.getTablesByUserId(userId);
+    }
+
     static async setupTables(userId, targetCount) {
         const count = Math.max(1, Math.min(Number(targetCount) || 10, 200));
 
