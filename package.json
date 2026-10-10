@@ -1,7 +1,7 @@
 {
-  "name": "slipzo-backend",
+  "name": "slipzen-backend",
   "version": "1.0.0",
-  "description": "Slipzo - Digital Receipt Management Backend",
+  "description": "Slipzen - Digital Receipt Management Backend",
   "type": "module",
   "scripts": {
     "start": "node server.js",

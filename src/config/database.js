@@ -198,6 +198,7 @@ export const initDatabase = async () => {
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS logo_url TEXT;
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'small_business';
                 ALTER TABLE shops ADD COLUMN IF NOT EXISTS table_count INTEGER DEFAULT 10;
+                ALTER TABLE shops ADD COLUMN IF NOT EXISTS staff_emails TEXT;
 
                 DROP VIEW IF EXISTS user_shop_details CASCADE;
 
@@ -436,6 +437,17 @@ export const initDatabase = async () => {
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_kirana_store_barcode ON kirana_store(barcode);
+                ALTER TABLE kirana_store ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
+                ALTER TABLE kirana_store ADD COLUMN IF NOT EXISTS barcode_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE kirana_store ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;
+                ALTER TABLE kirana_store ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'kirana_grocery';
+                ALTER TABLE small_business ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'small_business';
+                ALTER TABLE clothing_garments ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
+                ALTER TABLE clothing_garments ADD COLUMN IF NOT EXISTS barcode_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE clothing_garments ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'clothing_garments';
+                ALTER TABLE hotel_food ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
+                ALTER TABLE hotel_food ADD COLUMN IF NOT EXISTS barcode_active BOOLEAN DEFAULT TRUE;
+                ALTER TABLE hotel_food ADD COLUMN IF NOT EXISTS business_type TEXT DEFAULT 'hotel_food';
 
                 CREATE TABLE IF NOT EXISTS small_business (
                     id TEXT PRIMARY KEY,
@@ -849,6 +861,17 @@ export const initDatabase = async () => {
                 )
             `);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_kirana_store_barcode ON kirana_store(barcode)`);
+            try { await sqliteRun("ALTER TABLE kirana_store ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE kirana_store ADD COLUMN barcode_active INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE kirana_store ADD COLUMN is_available INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE kirana_store ADD COLUMN business_type TEXT DEFAULT 'kirana_grocery'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE small_business ADD COLUMN business_type TEXT DEFAULT 'small_business'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE clothing_garments ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE clothing_garments ADD COLUMN barcode_active INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE clothing_garments ADD COLUMN business_type TEXT DEFAULT 'clothing_garments'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE hotel_food ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE hotel_food ADD COLUMN barcode_active INTEGER DEFAULT 1"); } catch (_) { }
+            try { await sqliteRun("ALTER TABLE hotel_food ADD COLUMN business_type TEXT DEFAULT 'hotel_food'"); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS small_business (

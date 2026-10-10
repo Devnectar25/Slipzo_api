@@ -10,8 +10,8 @@ export const createSubscription = async (req, res, next) => {
     }
 
     const userId = req.user?.id || 'guest';
-    const email = req.user?.email || user_email || 'user@slipzo.com';
-    const name = req.user?.name || user_name || 'Valued Slipzo Customer';
+    const email = req.user?.email || user_email || 'user@slipzen.com';
+    const name = req.user?.name || user_name || 'Valued Slipzen Customer';
 
     const subscription = await Subscription.create({
       user_id: userId,

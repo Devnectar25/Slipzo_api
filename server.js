@@ -104,7 +104,7 @@ app.use('/api/tables', restaurantRoutes);
 // Root & Health check endpoints
 app.get('/', (req, res) => {
     res.json({
-        name: 'Slipzo API Server',
+        name: 'Slipzen API Server',
         status: 'online',
         version: '1.0.0',
         health: '/api/health'
@@ -113,7 +113,7 @@ app.get('/', (req, res) => {
 
 app.get('/api', (req, res) => {
     res.json({
-        name: 'Slipzo API',
+        name: 'Slipzen API',
         status: 'healthy',
         timestamp: new Date().toISOString()
     });

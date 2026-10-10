@@ -19,6 +19,15 @@ export default class Shop {
         this.default_discount = Number(data.default_discount !== undefined ? data.default_discount : 0);
         this.business_type = data.business_type || 'small_business';
         this.table_count = Number(data.table_count || 10);
+        let parsedStaff = [];
+        if (data.staff_emails) {
+            try {
+                parsedStaff = typeof data.staff_emails === 'string' ? JSON.parse(data.staff_emails) : data.staff_emails;
+            } catch (e) {
+                parsedStaff = String(data.staff_emails).split(',').map(e => e.trim()).filter(Boolean);
+            }
+        }
+        this.staff_emails = Array.isArray(parsedStaff) ? parsedStaff : [];
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
