@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert, beginTransaction } from '../config/database.js';
 import { generateBillNumber, calculateBillTotals } from '../utils/helpers.js';
+import RestaurantTable from './RestaurantTable.js';
 
 export default class Bill {
     constructor(data) {
@@ -344,6 +345,7 @@ export default class Bill {
     static async markAsPrinted(id, userId) {
         if (!id || !userId) return false;
         const connection = await beginTransaction();
+        let tableToReset = null;
         try {
             // Check if bill exists in saved_bills
             const savedRows = await connection.query(
@@ -353,6 +355,7 @@ export default class Bill {
 
             if (savedRows && savedRows.length > 0) {
                 const bill = savedRows[0];
+                tableToReset = bill.table_number || bill.table;
 
                 // Check if already in print_bills
                 const existingPrint = await connection.query(
@@ -390,11 +393,29 @@ export default class Bill {
                 await connection.query('DELETE FROM saved_bills WHERE id = ? AND user_id = ?', [id, userId]);
             }
 
+            // Also check bills table if table_number was saved there
+            if (!tableToReset) {
+                const billRows = await connection.query('SELECT table_number FROM bills WHERE id = ? AND user_id = ?', [id, userId]).catch(() => []);
+                if (billRows && billRows.length > 0 && billRows[0].table_number) {
+                    tableToReset = billRows[0].table_number;
+                }
+            }
+
             // Also update bills table if it exists
             await connection.query('UPDATE bills SET is_saved = 0 WHERE id = ? AND user_id = ?', [id, userId]).catch(() => {});
 
             await connection.commit();
             connection.release();
+
+            // Reset table to AVAILABLE
+            if (tableToReset) {
+                try {
+                    await RestaurantTable.resetTable(userId, tableToReset);
+                } catch (tErr) {
+                    console.warn(`Could not reset table ${tableToReset} on bill print:`, tErr);
+                }
+            }
+
             return true;
         } catch (err) {
             await connection.rollback();
@@ -415,6 +436,9 @@ export default class Bill {
             await this.markAsPrinted(row.id, userId);
             count++;
         }
+        try {
+            await RestaurantTable.resetTable(userId, cleanTable);
+        } catch (_) {}
         return count;
     }
 

@@ -51,6 +51,18 @@ export const resetTable = async (req, res, next) => {
     }
 };
 
+export const resetAllTables = async (req, res, next) => {
+    try {
+        const tables = await RestaurantTable.resetAllTables(req.user.id);
+        res.json({
+            message: 'All tables reset successfully',
+            tables
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
 export const setupTables = async (req, res, next) => {
     try {
         const { table_count } = req.body;
