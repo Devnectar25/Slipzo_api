@@ -11,8 +11,8 @@ router.post('/claim-onboarding-reward', authMiddleware, claimOnboardingReward);
 // Deduct 1 print credit on actual print operation
 router.post('/consume-print', authMiddleware, consumePrint);
 
-// Public / User subscription purchase route (uses optional auth so guests or logged in users can buy)
-router.post('/', optionalAuth, createSubscription);
+// Pack purchase: signed-in users only, and the payment is verified with Razorpay before any prints are granted
+router.post('/', authMiddleware, createSubscription);
 
 // Logged-in user's subscriptions
 router.get('/my', authMiddleware, getUserSubscriptions);

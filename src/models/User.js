@@ -1,4 +1,13 @@
-import bcrypt from 'bcryptjs';
+import bcryptjs from 'bcryptjs';
+// bcryptjs runs on the main thread and freezes the whole server for ~100 ms per password, and when many people sign in
+// at once they all finish together. The native module hashes on worker threads, in order. Same hash format, so existing
+// passwords keep working both ways. If the native build is not available on a host, fall back to the pure-JS one.
+let bcrypt = bcryptjs;
+try {
+    bcrypt = (await import('bcrypt')).default;
+} catch (e) {
+    console.warn('⚠️ Native bcrypt unavailable, using bcryptjs (slower under load):', e.message);
+}
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert } from '../config/database.js';
 
@@ -60,6 +69,12 @@ class User {
             console.error('❌ User creation error:', err);
             throw err;
         }
+    }
+
+    /** Case-insensitive, because accounts created before emails were lowercased may be mixed case. */
+    static async existsByEmail(email) {
+        const row = await queryOne('SELECT id FROM users WHERE LOWER(email) = ?', [String(email).trim().toLowerCase()]);
+        return Boolean(row);
     }
 
     static async findByEmail(email) {

@@ -31,6 +31,9 @@ app.use(helmet({
 }));
 
 // Rate limiting (relaxed for development and admin)
+// Behind Vercel/another proxy, req.ip is the proxy unless told to trust it; without this every user shares one rate limit
+app.set('trust proxy', 1);
+
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 10000, // Generous limit so users and admins never hit 429 errors
@@ -53,15 +56,22 @@ const allowedOrigins = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'https://slipzo.vercel.app',
+    'https://slipzo.in',
+    'https://www.slipzo.in',
     ...envOrigins
 ].filter(Boolean);
 
+// The web app in dev, and the Android app (Capacitor serves it from http://localhost or capacitor://localhost)
+const isLocalOrigin = (origin) =>
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || origin === 'capacitor://localhost' || origin === 'ionic://localhost';
+
 const corsOptions = {
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:') || origin.endsWith('.vercel.app')) {
-            return callback(null, true);
-        }
-        return callback(null, true);
+        // No Origin header: same-origin requests, curl, server-to-server. Browsers always send one for cross-site calls.
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin) || isLocalOrigin(origin)) return callback(null, true);
+        // Not an allowed site: answer without CORS headers so the browser blocks the page from reading the response
+        return callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -73,8 +83,13 @@ app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(cookieParser());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Only the routes that receive photos (shop logo, menu item images, admin products) may send big bodies.
+// Everything else is capped at 1 MB so one request cannot make the server hold tens of megabytes.
+const BIG_BODY_PREFIXES = ['/api/shop', '/api/menu', '/api/admin', '/api/small-business', '/api/products'];
+const bigJson = express.json({ limit: '50mb' });
+const smallJson = express.json({ limit: '1mb' });
+app.use((req, res, next) => (BIG_BODY_PREFIXES.some((p) => req.path.startsWith(p)) ? bigJson : smallJson)(req, res, next));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Initialize database
 console.log('🔧 Initializing database...');

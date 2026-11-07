@@ -408,6 +408,21 @@ export const initDatabase = async () => {
                 ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS barcode TEXT;
                 ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS barcode_type TEXT DEFAULT 'INTERNAL';
 
+                CREATE TABLE IF NOT EXISTS shop_staff (
+                    id TEXT PRIMARY KEY,
+                    owner_user_id TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    worker_user_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    invite_code_hash TEXT,
+                    invite_expires_at TEXT,
+                    failed_attempts INTEGER DEFAULT 0,
+                    created_at TEXT,
+                    accepted_at TEXT,
+                    UNIQUE (owner_user_id, email)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS shop_staff_worker_idx ON shop_staff (worker_user_id);
+
                 CREATE TABLE IF NOT EXISTS user_menu_items (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -546,6 +561,15 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_templates_user_id ON templates(user_id);
                 CREATE INDEX IF NOT EXISTS idx_bills_user_id ON bills(user_id);
                 CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number);
+
+                -- Bill numbers only need to be unique inside one shop. A global unique rule made two shops that both
+                -- started at SLP-<date>-1001 collide, and the second shop's Save failed.
+                ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_number_key;
+                ALTER TABLE saved_bills DROP CONSTRAINT IF EXISTS saved_bills_number_key;
+                ALTER TABLE print_bills DROP CONSTRAINT IF EXISTS print_bills_number_key;
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_bills_user_number ON bills(user_id, number);
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_bills_user_number ON saved_bills(user_id, number);
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_print_bills_user_number ON print_bills(user_id, number);
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL;
@@ -828,6 +852,23 @@ export const initDatabase = async () => {
             try { await sqliteRun("ALTER TABLE menu_items ADD COLUMN barcode_type TEXT DEFAULT 'INTERNAL'"); } catch (_) { }
 
             await sqliteRun(`
+                CREATE TABLE IF NOT EXISTS shop_staff (
+                    id TEXT PRIMARY KEY,
+                    owner_user_id TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    worker_user_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    invite_code_hash TEXT,
+                    invite_expires_at TEXT,
+                    failed_attempts INTEGER DEFAULT 0,
+                    created_at TEXT,
+                    accepted_at TEXT,
+                    UNIQUE (owner_user_id, email)
+                )
+            `);
+            await sqliteRun('CREATE UNIQUE INDEX IF NOT EXISTS shop_staff_worker_idx ON shop_staff (worker_user_id)');
+
+            await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS user_menu_items (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -1064,23 +1105,53 @@ export const beginTransaction = async () => {
     if (isPg) {
         const client = await pgPool.connect();
         await client.query('BEGIN');
+        // The connection goes back to the pool exactly once. Callers finish with commit()/rollback() and then also call
+        // release(); releasing twice handed one connection to two requests, and a ROLLBACK after release could hit
+        // somebody else's transaction.
+        let finished = false;
+        let released = false;
+        const giveBack = (err) => {
+            if (released) return;
+            released = true;
+            try { client.release(err); } catch (e) { }
+        };
         return {
             query: async (sql, params = []) => {
+                if (released) throw new Error('Transaction is already finished');
                 const normalized = normalizeSql(sql);
                 const pgSql = convertSqlPlaceholders(normalized);
                 const res = await client.query(pgSql, params);
                 return pgSql.trim().toLowerCase().startsWith('select') ? res.rows : { affectedRows: res.rowCount, rows: res.rows };
             },
             commit: async () => {
-                await client.query('COMMIT');
-                client.release();
+                if (finished) return;
+                finished = true;
+                try {
+                    await client.query('COMMIT');
+                    giveBack();
+                } catch (e) {
+                    giveBack(e); // a connection that failed to commit is discarded, not reused
+                    throw e;
+                }
             },
             rollback: async () => {
-                await client.query('ROLLBACK');
-                client.release();
+                if (finished) return;
+                finished = true;
+                try {
+                    await client.query('ROLLBACK');
+                    giveBack();
+                } catch (e) {
+                    giveBack(e);
+                }
             },
             release: () => {
-                try { client.release(); } catch (e) { }
+                if (!finished) {
+                    // Released with the work unfinished: undo it and drop the connection
+                    finished = true;
+                    giveBack(new Error('released inside an open transaction'));
+                    return;
+                }
+                giveBack();
             }
         };
     } else {

@@ -49,19 +49,24 @@ export default class Bill {
         }
 
         // Pre-check uniqueness of billNumber, incrementing sequence if already taken
-        let existing = await queryOne('SELECT id FROM bills WHERE number = ?', [billNumber]);
+        // (bills live in saved_bills / print_bills; the old "bills" table is not where new bills go)
+        const numberTaken = (num) => queryOne(
+            'SELECT id FROM saved_bills WHERE number = ? AND user_id = ? UNION ALL SELECT id FROM print_bills WHERE number = ? AND user_id = ? LIMIT 1',
+            [num, billData.user_id, num, billData.user_id]
+        );
+        let existing = await numberTaken(billNumber);
         let attempts = 0;
         while (existing && attempts < 100) {
             attempts++;
             currentSeq++;
             billNumber = generateBillNumber(prefix, currentSeq, format);
-            existing = await queryOne('SELECT id FROM bills WHERE number = ?', [billNumber]);
+            existing = await numberTaken(billNumber);
         }
 
         let insertedBillId = null;
         let retryCount = 0;
 
-        while (!insertedBillId && retryCount < 5) {
+        while (!insertedBillId && retryCount < 25) {
             retryCount++;
             const connection = await beginTransaction();
 
@@ -165,12 +170,13 @@ export default class Bill {
                 connection.release();
 
                 const isDupNumber = err.message?.includes('bills_number_key') || 
+                                   err.message?.includes('_user_number') || 
                                    err.message?.includes('bills.number') || 
                                    err.message?.includes('saved_bills.number') || 
                                    err.message?.includes('UNIQUE constraint failed') ||
                                    err.message?.includes('Duplicate entry');
 
-                if (isDupNumber && retryCount < 5) {
+                if (isDupNumber && retryCount < 25) {
                     currentSeq++;
                     billNumber = generateBillNumber(prefix, currentSeq, format);
                     continue;
@@ -301,8 +307,11 @@ export default class Bill {
             const countResult = await queryOne(`SELECT COUNT(*) as total ${baseSql}`, params);
             const total = Number(countResult?.total || 0);
 
-            const offset = (Math.max(1, Number(page)) - 1) * Number(limit);
-            const queryParams = [...params, Number(limit), Number(offset)];
+            // page=abc, limit=-5 or limit=1000000 must not reach the database as they are
+            const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 20));
+            const safePage = Math.max(1, parseInt(page, 10) || 1);
+            const offset = (safePage - 1) * safeLimit;
+            const queryParams = [...params, safeLimit, offset];
             const bills = await query(
                 `SELECT * ${baseSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
                 queryParams
@@ -452,7 +461,7 @@ export default class Bill {
         }
 
         if (!bill) {
-            throw new Error('Saved bill not found or cannot be edited. Only saved bills can be edited.');
+            throw Object.assign(new Error('Saved bill not found or cannot be edited. Only saved bills can be edited.'), { statusCode: 404 });
         }
 
         const totals = calculateBillTotals(billData.items, billData.discount, billData.tax_rate);
@@ -568,18 +577,24 @@ export default class Bill {
     static async delete(id, userId) {
         const connection = await beginTransaction();
         try {
-            await connection.query('DELETE FROM saved_bill_items WHERE bill_id = ?', [id]);
-            await connection.query('DELETE FROM saved_bills WHERE id = ? AND user_id = ?', [id, userId]);
-
-            await connection.query('DELETE FROM print_bill_items WHERE bill_id = ?', [id]);
-            await connection.query('DELETE FROM print_bills WHERE id = ? AND user_id = ?', [id, userId]);
-
-            await connection.query('DELETE FROM bill_items WHERE bill_id = ?', [id]);
-            await connection.query('DELETE FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
+            // Items are only removed when the bill itself belongs to this user
+            let removed = 0;
+            for (const [itemsTable, billsTable] of [
+                ['saved_bill_items', 'saved_bills'],
+                ['print_bill_items', 'print_bills'],
+                ['bill_items', 'bills']
+            ]) {
+                await connection.query(
+                    `DELETE FROM ${itemsTable} WHERE bill_id = ? AND bill_id IN (SELECT id FROM ${billsTable} WHERE id = ? AND user_id = ?)`,
+                    [id, id, userId]
+                );
+                const res = await connection.query(`DELETE FROM ${billsTable} WHERE id = ? AND user_id = ?`, [id, userId]);
+                removed += Number(res?.affectedRows || 0);
+            }
 
             await connection.commit();
             connection.release();
-            return true;
+            return removed > 0;
         } catch (err) {
             await connection.rollback();
             connection.release();

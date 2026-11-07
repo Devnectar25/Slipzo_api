@@ -4,6 +4,8 @@ import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
 import RestaurantTable from '../models/RestaurantTable.js';
 
+const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
+
 export const getBills = async (req, res, next) => {
     try {
         const { page, limit, search, payment_mode, days_limit, is_saved, saved_only } = req.query;
@@ -61,15 +63,15 @@ export const createBill = async (req, res, next) => {
             const rate = Number(item.rate);
 
             if (!name) {
-                throw new Error(`Item ${index + 1}: Name is required`);
+                throw badRequest(`Item ${index + 1}: Name is required`);
             }
 
             if (!Number.isFinite(quantity) || quantity <= 0) {
-                throw new Error(`Item ${index + 1}: Quantity must be at least 1`);
+                throw badRequest(`Item ${index + 1}: Quantity must be at least 1`);
             }
 
             if (!Number.isFinite(rate) || rate < 0) {
-                throw new Error(`Item ${index + 1}: Rate cannot be negative`);
+                throw badRequest(`Item ${index + 1}: Rate cannot be negative`);
             }
 
             const barcode = item.barcode ? String(item.barcode).trim() : null;
@@ -221,9 +223,9 @@ export const updateBill = async (req, res, next) => {
             const quantity = Number(item.quantity);
             const rate = Number(item.rate);
 
-            if (!name) throw new Error(`Item ${index + 1}: Name is required`);
-            if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Item ${index + 1}: Quantity must be at least 1`);
-            if (!Number.isFinite(rate) || rate < 0) throw new Error(`Item ${index + 1}: Rate cannot be negative`);
+            if (!name) throw badRequest(`Item ${index + 1}: Name is required`);
+            if (!Number.isFinite(quantity) || quantity <= 0) throw badRequest(`Item ${index + 1}: Quantity must be at least 1`);
+            if (!Number.isFinite(rate) || rate < 0) throw badRequest(`Item ${index + 1}: Rate cannot be negative`);
 
             return { name, quantity, rate, barcode: item.barcode || null };
         });
@@ -262,6 +264,9 @@ export const markBillAsPrinted = async (req, res, next) => {
     try {
         const { id } = req.params;
         const bill = await Bill.findByIdAndUser(id, req.user.id);
+        if (!bill) {
+            return res.status(404).json({ detail: 'Bill not found' });
+        }
         const tableNum = bill?.table_number || bill?.table;
 
         await Bill.markAsPrinted(id, req.user.id);

@@ -16,12 +16,6 @@ class Subscription {
       if (checkEmail && checkEmail.length > 0) validUserId = checkEmail[0].id;
     }
 
-    // Fallback if no matching registered user found: use first registered user or null
-    if (!validUserId) {
-      const firstUser = await query('SELECT id FROM users LIMIT 1').catch(() => []);
-      if (firstUser && firstUser.length > 0) validUserId = firstUser[0].id;
-    }
-
     const sql = `
       INSERT INTO subscriptions (
         id, user_id, user_name, user_email, plan_name, amount, prints_count, payment_id, payment_status, created_at

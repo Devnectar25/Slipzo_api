@@ -1,11 +1,12 @@
 import User from '../models/User.js';
+import { getStaffContext } from '../middleware/auth.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
 
 export const register = async (req, res, next) => {
     try {
-        console.log('📝 Registration request received:', req.body);
+        console.log('📝 Registration request received');
         const { email, password, name } = req.body;
 
         if (!email || !password || !name) {
@@ -92,7 +93,7 @@ export const register = async (req, res, next) => {
 
 export const login = async (req, res, next) => {
     try {
-        console.log('🔐 Login request received:', req.body.email);
+        console.log('🔐 Login request received');
         const { email, password } = req.body;
 
         if (!email || !password) {
@@ -144,7 +145,7 @@ export const login = async (req, res, next) => {
         });
 
         console.log('✅ Login successful for:', email);
-        res.json({ ...user.toJSON(), token });
+        res.json({ ...user.toJSON(), staff_of: await getStaffContext(user.id), token });
     } catch (err) {
         console.error('❌ Login error:', err);
         next(err);
@@ -157,5 +158,6 @@ export const logout = (req, res) => {
 };
 
 export const getMe = (req, res) => {
-    res.json(req.user.toJSON());
+    // A worker's req.user is the shop owner; this must describe who is really logged in
+    res.json({ ...req.authUser.toJSON(), staff_of: req.staffOf || null });
 };

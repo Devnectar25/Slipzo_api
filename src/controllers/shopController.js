@@ -2,6 +2,7 @@ import Shop from '../models/Shop.js';
 import UserMenuItem from '../models/UserMenuItem.js';
 import RestaurantTable from '../models/RestaurantTable.js';
 import { query, supabase } from '../config/database.js';
+import { clearUserAuthCache } from '../middleware/auth.js';
 
 const BUCKET_NAME = 'Shop_Profile';
 
@@ -34,7 +35,7 @@ async function uploadShopProfileImage(rawData, shopName, userId) {
       .replace(/_+/g, '_')
       .toLowerCase();
 
-    const fileName = `${cleanName}_${userId}.${ext}`;
+    const fileName = `${cleanName}_${userId}_${Date.now()}.${ext}`;
 
     const { error: uploadError } = await supabase.storage
       .from(BUCKET_NAME)
@@ -173,12 +174,6 @@ export const updateShop = async (req, res, next) => {
       }
     }
 
-    if (req.body.staff_emails !== undefined) {
-      updates.staff_emails = Array.isArray(req.body.staff_emails)
-        ? JSON.stringify(req.body.staff_emails)
-        : String(req.body.staff_emails).trim();
-    }
-
     if (req.body.logo_url !== undefined) {
       const logoInput = req.body.logo_url ? String(req.body.logo_url).trim() : '';
       if (!logoInput) {
@@ -194,6 +189,7 @@ export const updateShop = async (req, res, next) => {
     }
 
     const shop = await Shop.update(req.user.id, updates);
+    clearUserAuthCache(req.user.id);
 
     if (!shop) {
       return res.status(404).json({ detail: 'Shop not found' });
@@ -215,6 +211,7 @@ export const uploadShopLogo = async (req, res, next) => {
     const publicUrl = await uploadShopProfileImage(image, targetShopName, req.user.id);
 
     await Shop.update(req.user.id, { logo_url: publicUrl });
+    clearUserAuthCache(req.user.id);
 
     res.json({ logo_url: publicUrl });
   } catch (err) {
