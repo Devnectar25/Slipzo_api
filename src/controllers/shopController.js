@@ -148,23 +148,14 @@ export const updateShop = async (req, res, next) => {
     }
 
     if (req.body.business_type !== undefined) {
-      const allowed = ['small_business', 'kirana_grocery', 'clothing_garments', 'hotel_food'];
-      const rawType = String(req.body.business_type).trim().toLowerCase();
-      const newType = allowed.includes(rawType) ? rawType : 'small_business';
-      
       const currentShop = await Shop.findByUserId(req.user.id);
-      if (currentShop && currentShop.business_type !== newType) {
-        await query('DELETE FROM user_menu_items WHERE user_id = ?', [req.user.id]);
-        console.log(`🧹 Cleared user_menu_items for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
-
-        try {
-          await RestaurantTable.resetAllTables(req.user.id);
-          console.log(`🧹 Reset all restaurant_tables for user ${req.user.id} because business category changed from ${currentShop.business_type} to ${newType}`);
-        } catch (tableErr) {
-          console.error(`Failed to reset restaurant_tables on category switch:`, tableErr);
-        }
+      // Once a shop profile is created, the shop category cannot be changed
+      if (!currentShop?.business_type) {
+        const allowed = ['small_business', 'kirana_grocery', 'clothing_garments', 'hotel_food'];
+        const rawType = String(req.body.business_type).trim().toLowerCase();
+        const newType = allowed.includes(rawType) ? rawType : 'small_business';
+        updates.business_type = newType;
       }
-      updates.business_type = newType;
     }
 
     if (req.body.table_count !== undefined) {

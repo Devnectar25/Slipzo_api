@@ -132,6 +132,17 @@ export const initDatabase = async () => {
         if (isPg) {
             // Fast check: if tables already exist, skip heavy DDL to prevent locking PostgreSQL catalogs
             try {
+                const check = await pgPool.query("SELECT to_regclass('public.users') as u, to_regclass('public.shops') as s");
+                if (check.rows[0]?.u && check.rows[0]?.s) {
+                    console.log('⚡ Database schema already initialized, skipping heavy DDL migrations.');
+                    isDbInitialized = true;
+                    return;
+                }
+            } catch (err) {
+                console.warn('⚠️ Fast schema check skipped:', err.message);
+            }
+
+            try {
                 await pgPool.query(`
                     CREATE TABLE IF NOT EXISTS subscriptions (
                         id TEXT PRIMARY KEY,

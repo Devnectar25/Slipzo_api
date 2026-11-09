@@ -74,6 +74,7 @@ const corsOptions = {
         return callback(null, false);
     },
     credentials: true,
+    maxAge: 86400,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
 };
