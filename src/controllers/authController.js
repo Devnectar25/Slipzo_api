@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import { getStaffContext } from '../middleware/auth.js';
 import Shop from '../models/Shop.js';
+import Subscription from '../models/Subscription.js';
 import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
 import { normalizePhone, isPhoneEmail } from '../utils/phone.js';
@@ -54,6 +55,48 @@ export const register = async (req, res, next) => {
         const email = String(req.body.email || '').trim().toLowerCase();
         if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || isPhoneEmail(email))) {
             return res.status(400).json({ detail: 'Please enter a valid email address or leave it blank' });
+        }
+
+        // Someone who started signing up but left before choosing a plan comes back with the same number.
+        // Their account exists but is unfinished (nothing bought, setup not done). With the same password they simply carry on;
+        // with a different one nothing changes, because without a code sent to the phone this must not become a way into the account.
+        const existing = await User.findByPhone(phone);
+        if (existing) {
+            const quota = await Subscription.getQuotaByUserId(existing.id);
+            const worksForAShop = await getStaffContext(existing.id);
+            const unfinished = quota.isFreeTier && !quota.onboardingRewardClaimed && !worksForAShop;
+            if (unfinished) {
+                const samePassword = await User.validatePassword(existing, password);
+                if (!samePassword) {
+                    return res.status(409).json({
+                        detail: 'You already started signing up with this mobile number. Sign in with the password you chose to continue.',
+                        code: 'SIGNUP_IN_PROGRESS'
+                    });
+                }
+                // The details typed this time replace the ones from the first try
+                try {
+                    const rawType = String(req.body.business_type || '').trim().toLowerCase();
+                    const allowedTypes = ['small_business', 'kirana_grocery', 'clothing_garments', 'hotel_food'];
+                    const updates = {};
+                    if (shopName) updates.name = shopName;
+                    if (allowedTypes.includes(rawType)) updates.business_type = rawType;
+                    if (Object.keys(updates).length > 0) await Shop.update(existing.id, updates);
+                } catch (shopError) {
+                    console.warn('⚠️ Could not update shop details while resuming sign up:', shopError.message);
+                }
+                const resumed = await User.findByPhone(phone);
+                const resumeToken = generateToken(existing.id);
+                const resumeProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+                res.cookie('token', resumeToken, {
+                    httpOnly: true,
+                    secure: resumeProd,
+                    sameSite: resumeProd ? 'none' : 'lax',
+                    maxAge: 7 * 24 * 60 * 60 * 1000
+                });
+                console.log('↩️ Sign up resumed for unfinished account:', existing.id);
+                return res.status(200).json({ ...resumed.toJSON(), token: resumeToken, resumed: true });
+            }
+            // A finished account falls through to the normal "already registered" answer below
         }
 
         console.log('✅ Validation passed, creating user...');

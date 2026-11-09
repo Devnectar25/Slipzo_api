@@ -1,7 +1,42 @@
 import Subscription from '../models/Subscription.js';
 import { query } from '../config/database.js';
 import { priceForPrints, MIN_PRINTS, MAX_PRINTS } from '../utils/pricing.js';
-import { verifyPayment, paymentsConfigured, unverifiedPaymentsAllowed } from '../utils/razorpay.js';
+import { verifyPayment, paymentsConfigured, unverifiedPaymentsAllowed, createOrder } from '../utils/razorpay.js';
+
+// Step 1 of paying from the phone app: the server decides the price and opens a Razorpay order for it.
+export const createPaymentOrder = async (req, res, next) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ detail: 'Please sign in to buy prints.' });
+    }
+    const prints = Number(req.body?.prints_count);
+    const price = priceForPrints(prints);
+    if (price === null) {
+      return res.status(400).json({ detail: `Pack size must be a whole number between ${MIN_PRINTS} and ${MAX_PRINTS} prints.` });
+    }
+    if (!paymentsConfigured()) {
+      console.error('❌ RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set: cannot open a payment order');
+      return res.status(503).json({ detail: 'Payment verification is not configured on the server.', code: 'NOT_CONFIGURED' });
+    }
+    const receipt = `slp_${Date.now().toString(36)}_${String(req.user.id).replace(/-/g, '').slice(0, 10)}`;
+    const made = await createOrder(price, receipt, { user_id: String(req.user.id), prints: String(prints), plan_name: String(req.body?.plan_name || '').slice(0, 60) });
+    if (!made.ok) {
+      const status = made.code === 'GATEWAY_UNREACHABLE' ? 502 : 502;
+      return res.status(status).json({ detail: made.detail, code: made.code });
+    }
+    res.json({
+      order_id: made.order.id,
+      amount: made.order.amount,
+      currency: made.order.currency || 'INR',
+      key_id: process.env.RAZORPAY_KEY_ID,
+      prints_count: prints,
+      price
+    });
+  } catch (err) {
+    console.error('❌ Error creating payment order:', err);
+    next(err);
+  }
+};
 
 // Payment ids being confirmed right now. A second request for the same id waits out as "already used" instead of racing the first.
 const confirming = new Set();
@@ -45,7 +80,9 @@ export const createSubscription = async (req, res, next) => {
     if (unverifiedPaymentsAllowed() && !paymentsConfigured()) {
       console.warn('⚠️ ALLOW_UNVERIFIED_PAYMENTS is on: recording a payment without checking it with Razorpay (development only)');
     } else {
-      const check = await verifyPayment(paymentId, price);
+      // A payment from the phone app's own screen comes with the order it was made for
+      const orderId = /^order_[A-Za-z0-9]+$/.test(String(req.body.order_id || '')) ? String(req.body.order_id) : null;
+      const check = await verifyPayment(paymentId, price, orderId);
       if (!check.ok) {
         const status = check.code === 'NOT_CONFIGURED' ? 503 : check.code === 'GATEWAY_UNREACHABLE' ? 502 : 402;
         if (check.code === 'NOT_CONFIGURED') console.error('❌ RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set: refusing to grant prints for an unverified payment');

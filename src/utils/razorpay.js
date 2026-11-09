@@ -8,7 +8,32 @@ export const paymentsConfigured = () => Boolean(process.env.RAZORPAY_KEY_ID && p
 export const unverifiedPaymentsAllowed = () =>
     process.env.ALLOW_UNVERIFIED_PAYMENTS === 'true' && process.env.NODE_ENV !== 'production';
 
-export const verifyPayment = async (paymentId, expectedRupees) => {
+// Creates a Razorpay order for a pack. The phone app's own payment screen needs one for every payment.
+// The amount is whatever the server worked out, never a number from the app.
+export const createOrder = async (amountRupees, receipt, notes = {}) => {
+    if (!paymentsConfigured()) {
+        return { ok: false, code: 'NOT_CONFIGURED', detail: 'Payment verification is not configured on the server.' };
+    }
+    try {
+        const auth = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+        const res = await fetch(`${apiBase()}/orders`, {
+            method: 'POST',
+            headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount: Math.round(amountRupees * 100), currency: 'INR', receipt, notes }),
+            signal: AbortSignal.timeout(10000)
+        });
+        const order = await res.json().catch(() => null);
+        if (!res.ok || !order?.id) {
+            console.error('❌ Razorpay refused to create an order:', res.status, JSON.stringify(order)?.slice(0, 200));
+            return { ok: false, code: 'ORDER_FAILED', detail: 'Could not start the payment. Please try again.' };
+        }
+        return { ok: true, order };
+    } catch (e) {
+        return { ok: false, code: 'GATEWAY_UNREACHABLE', detail: 'Could not reach the payment gateway to confirm the payment. Please try again.' };
+    }
+};
+
+export const verifyPayment = async (paymentId, expectedRupees, expectedOrderId = null) => {
     if (!paymentsConfigured()) {
         return { ok: false, code: 'NOT_CONFIGURED', detail: 'Payment verification is not configured on the server.' };
     }
@@ -32,6 +57,10 @@ export const verifyPayment = async (paymentId, expectedRupees) => {
     }
     if (String(payment.currency || 'INR').toUpperCase() !== 'INR') {
         return { ok: false, code: 'BAD_CURRENCY', detail: 'Unexpected payment currency.' };
+    }
+    // A payment made for one order cannot be used to claim another
+    if (expectedOrderId && payment.order_id !== expectedOrderId) {
+        return { ok: false, code: 'ORDER_MISMATCH', detail: 'This payment does not belong to this order.' };
     }
     if (Number(payment.amount) < Math.round(expectedRupees * 100)) {
         return { ok: false, code: 'AMOUNT_TOO_LOW', detail: 'The amount paid does not cover this pack.' };

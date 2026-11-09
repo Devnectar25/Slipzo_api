@@ -1,5 +1,5 @@
 import express from 'express';
-import { createSubscription, getUserSubscriptions, getAllSubscriptions, claimOnboardingReward, consumePrint } from '../controllers/subscriptionController.js';
+import { createSubscription, createPaymentOrder, getUserSubscriptions, getAllSubscriptions, claimOnboardingReward, consumePrint } from '../controllers/subscriptionController.js';
 import { optionalAuth, authMiddleware } from '../middleware/auth.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
@@ -11,6 +11,9 @@ router.post('/complete-onboarding', authMiddleware, claimOnboardingReward);
 
 // Deduct 1 print credit on actual print operation
 router.post('/consume-print', authMiddleware, consumePrint);
+
+// Phone app payments: the server opens a Razorpay order for a pack (price decided here), then the pack is confirmed as below
+router.post('/order', authMiddleware, createPaymentOrder);
 
 // Pack purchase: signed-in users only, and the payment is verified with Razorpay before any prints are granted
 router.post('/', authMiddleware, createSubscription);
