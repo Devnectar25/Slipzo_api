@@ -3,24 +3,25 @@ import { getStaffContext } from '../middleware/auth.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
+import { normalizePhone, isPhoneEmail } from '../utils/phone.js';
 
 export const register = async (req, res, next) => {
     try {
         console.log('📝 Registration request received');
-        const { email, password, name } = req.body;
+        const { password, name } = req.body;
 
-        if (!email || !password || !name) {
+        if (!req.body.phone || !password || !name) {
             console.log('❌ Missing required fields');
-            return res.status(400).json({ 
-                detail: 'Email, password, and name are required' 
+            return res.status(400).json({
+                detail: 'Mobile number, password, and name are required'
             });
         }
 
-        const emailRegex = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.com$/;
-        if (!emailRegex.test(email.trim())) {
-            console.log('❌ Invalid email format');
+        const phone = normalizePhone(req.body.phone);
+        if (!phone) {
+            console.log('❌ Invalid mobile number');
             return res.status(400).json({
-                detail: 'Please enter a valid email address'
+                detail: 'Please enter a valid 10-digit mobile number'
             });
         }
 
@@ -45,11 +46,21 @@ export const register = async (req, res, next) => {
             });
         }
 
+        // Shop name and email come with the sign-up form. The email is optional.
+        const shopName = String(req.body.shop_name || '').trim();
+        if (shopName && (shopName.length < 2 || shopName.length > 100)) {
+            return res.status(400).json({ detail: 'Shop name must be between 2 and 100 characters' });
+        }
+        const email = String(req.body.email || '').trim().toLowerCase();
+        if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || isPhoneEmail(email))) {
+            return res.status(400).json({ detail: 'Please enter a valid email address or leave it blank' });
+        }
+
         console.log('✅ Validation passed, creating user...');
 
         // Create user
-        const user = await User.create({ email, password, name });
-        console.log('✅ User created:', user.id, user.email);
+        const user = await User.create({ phone, password, name, ...(email ? { email } : {}) });
+        console.log('✅ User created:', user.id);
 
         // Create default shop
         try {
@@ -59,7 +70,8 @@ export const register = async (req, res, next) => {
 
             await Shop.create({
                 user_id: user.id,
-                name: `${name}'s Shop`,
+                name: shopName || `${name}'s Shop`,
+                phone,
                 business_type
             });
             console.log('✅ Default shop created with category:', business_type);
@@ -94,19 +106,29 @@ export const register = async (req, res, next) => {
 export const login = async (req, res, next) => {
     try {
         console.log('🔐 Login request received');
-        const { email, password } = req.body;
+        const { password } = req.body;
+        // Mobile number is the sign-in ID. An email is still accepted so accounts made before this change can get in.
+        const identifier = String(req.body.phone ?? req.body.email ?? '').trim();
 
-        if (!email || !password) {
-            console.log('❌ Missing email or password');
-            return res.status(400).json({ 
-                detail: 'Email and password are required' 
+        if (!identifier || !password) {
+            console.log('❌ Missing mobile number or password');
+            return res.status(400).json({
+                detail: 'Mobile number and password are required'
             });
         }
 
-        console.log('🔐 Finding user by email...');
-        const user = await User.findByEmail(email);
+        let user = null;
+        if (identifier.includes('@')) {
+            user = await User.findByEmail(identifier);
+        } else {
+            const phone = normalizePhone(identifier);
+            if (!phone) {
+                return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number' });
+            }
+            user = await User.findByPhone(phone);
+        }
         if (!user) {
-            console.log('❌ User not found:', email);
+            console.log('❌ User not found');
             return res.status(401).json({ detail: 'Invalid credentials' });
         }
         console.log('✅ User found:', user.id);
@@ -114,7 +136,7 @@ export const login = async (req, res, next) => {
         console.log('🔐 Validating password...');
         const isValidPassword = await User.validatePassword(user, password);
         if (!isValidPassword) {
-            console.log('❌ Invalid password for user:', email);
+            console.log('❌ Invalid password for user:', user.id);
             return res.status(401).json({ detail: 'Invalid credentials' });
         }
         console.log('✅ Password validated');
@@ -144,7 +166,7 @@ export const login = async (req, res, next) => {
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
-        console.log('✅ Login successful for:', email);
+        console.log('✅ Login successful for:', user.id);
         res.json({ ...user.toJSON(), staff_of: await getStaffContext(user.id), token });
     } catch (err) {
         console.error('❌ Login error:', err);

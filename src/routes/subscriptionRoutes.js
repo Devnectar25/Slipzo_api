@@ -7,6 +7,7 @@ const router = express.Router();
 
 // Claim 10 free prints onboarding reward (one-time duplicate-safe)
 router.post('/claim-onboarding-reward', authMiddleware, claimOnboardingReward);
+router.post('/complete-onboarding', authMiddleware, claimOnboardingReward);
 
 // Deduct 1 print credit on actual print operation
 router.post('/consume-print', authMiddleware, consumePrint);

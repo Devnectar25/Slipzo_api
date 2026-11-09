@@ -3,7 +3,11 @@ import { query } from '../config/database.js';
 import { priceForPrints, MIN_PRINTS, MAX_PRINTS } from '../utils/pricing.js';
 import { verifyPayment, paymentsConfigured, unverifiedPaymentsAllowed } from '../utils/razorpay.js';
 
+// Payment ids being confirmed right now. A second request for the same id waits out as "already used" instead of racing the first.
+const confirming = new Set();
+
 export const createSubscription = async (req, res, next) => {
+  let lockedPaymentId = null;
   try {
     const { plan_name, prints_count, payment_id } = req.body;
 
@@ -26,6 +30,12 @@ export const createSubscription = async (req, res, next) => {
       return res.status(400).json({ detail: 'Payment id is required' });
     }
 
+    if (confirming.has(paymentId)) {
+      return res.status(409).json({ detail: 'This payment has already been used.' });
+    }
+    confirming.add(paymentId);
+    lockedPaymentId = paymentId;
+
     // One payment can only ever buy one pack
     const used = await query('SELECT id FROM subscriptions WHERE payment_id = ? LIMIT 1', [paymentId]);
     if (used && used.length > 0) {
@@ -43,7 +53,9 @@ export const createSubscription = async (req, res, next) => {
       }
     }
 
-    const subscription = await Subscription.create({
+    let subscription;
+    try {
+      subscription = await Subscription.create({
       user_id: req.user.id,
       user_name: req.user.name || 'Slipzen Member',
       user_email: req.user.email,
@@ -52,7 +64,14 @@ export const createSubscription = async (req, res, next) => {
       prints_count: prints,
       payment_id: paymentId,
       payment_status: 'completed'
-    });
+      });
+    } catch (createErr) {
+      // The database refuses a second record for the same payment id
+      if (createErr?.code === 'ER_DUP_ENTRY' || createErr?.code === '23505') {
+        return res.status(409).json({ detail: 'This payment has already been used.' });
+      }
+      throw createErr;
+    }
 
     const quota = await Subscription.getQuotaByUserId(req.user.id);
     console.log(`💳 Subscription recorded: user ${req.user.id} bought ${prints} prints for ₹${price}`);
@@ -65,6 +84,8 @@ export const createSubscription = async (req, res, next) => {
   } catch (err) {
     console.error('❌ Error saving subscription to database:', err);
     next(err);
+  } finally {
+    if (lockedPaymentId) confirming.delete(lockedPaymentId);
   }
 };
 
@@ -91,6 +112,7 @@ export const getAllSubscriptions = async (req, res, next) => {
   }
 };
 
+// Marks account setup as finished. No prints are given for this any more; a pack has to be bought first.
 export const claimOnboardingReward = async (req, res, next) => {
   try {
     const userId = req.user?.id;
@@ -104,33 +126,39 @@ export const claimOnboardingReward = async (req, res, next) => {
       return res.status(404).json({ detail: 'User not found' });
     }
 
-    const isAlreadyClaimed = Number(users[0].onboarding_reward_claimed || 0) === 1;
+    const isAlreadyClaimed = Number(users[0].onboarding_reward_claimed || 0) >= 1;
     if (isAlreadyClaimed) {
       const quota = await Subscription.getQuotaByUserId(userId);
       return res.status(200).json({
         success: false,
         alreadyClaimed: true,
         printsCredited: 0,
-        message: 'Onboarding reward has already been claimed for this account.',
+        message: 'Setup is already finished for this account.',
         quota
       });
     }
 
-    // Atomically set onboarding_reward_claimed = 1 only if it is currently 0 or NULL
+    // Setup cannot be finished before a pack has been bought (this is what keeps the plan step from being skipped)
+    const before = await Subscription.getQuotaByUserId(userId);
+    if (before.isFreeTier) {
+      return res.status(402).json({ detail: 'Please choose a plan before finishing setup.', code: 'PLAN_REQUIRED' });
+    }
+
+    // 2 = setup finished, no free prints (1 is only for accounts that got the old free prints)
     await query(
-      'UPDATE users SET onboarding_reward_claimed = 1 WHERE id = ? AND (onboarding_reward_claimed = 0 OR onboarding_reward_claimed IS NULL)',
+      'UPDATE users SET onboarding_reward_claimed = 2 WHERE id = ? AND (onboarding_reward_claimed = 0 OR onboarding_reward_claimed IS NULL)',
       [userId]
     );
 
     const quota = await Subscription.getQuotaByUserId(userId);
 
-    console.log(`🎉 Onboarding reward claimed: User [${users[0].email} / ${userId}] was credited 10 free prints. Current printsRemaining: ${quota.printsRemaining}`);
+    console.log(`✅ Setup finished: user [${users[0].email} / ${userId}]. Prints remaining: ${quota.printsRemaining}`);
 
     return res.status(200).json({
       success: true,
       alreadyClaimed: false,
-      printsCredited: 10,
-      message: '10 free prints onboarding reward credited successfully!',
+      printsCredited: 0,
+      message: 'Setup finished.',
       quota
     });
   } catch (err) {

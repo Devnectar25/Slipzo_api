@@ -10,6 +10,7 @@ try {
 }
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert } from '../config/database.js';
+import { phoneToEmail, phoneFromEmail, isPhoneEmail } from '../utils/phone.js';
 
 class User {
     constructor(data) {
@@ -17,6 +18,7 @@ class User {
         this.username = data.username || data.name;
         this.name = data.name;
         this.email = data.email;
+        this.phone = data.phone || phoneFromEmail(data.email) || null;
         this.password = data.password;
         this.onboarding_reward_claimed = data.onboarding_reward_claimed !== undefined ? Number(data.onboarding_reward_claimed) : 0;
         this.prints_used = Number(data.prints_used || 0);
@@ -27,13 +29,21 @@ class User {
 
     static async create(userData) {
         try {
-            console.log('🔐 Starting user creation for:', userData.email);
+            console.log('🔐 Starting user creation');
             
-            // Check if user exists
-            const existing = await queryOne('SELECT id FROM users WHERE email = ?', [userData.email]);
-            if (existing) {
-                console.log('❌ Email already registered:', userData.email);
-                throw new Error('Email already registered');
+            // The account ID is the mobile number; the internal address keeps email-keyed features working
+            const phone = userData.phone || null;
+            const email = String(userData.email || (phone ? phoneToEmail(phone) : '')).toLowerCase().trim();
+
+            if (phone) {
+                const phoneTaken = await queryOne('SELECT id FROM users WHERE phone = ? OR LOWER(email) = ?', [phone, phoneToEmail(phone)]);
+                if (phoneTaken) {
+                    throw Object.assign(new Error('This mobile number is already registered'), { statusCode: 400 });
+                }
+            }
+            const emailTaken = await queryOne('SELECT id FROM users WHERE LOWER(email) = ?', [email]);
+            if (emailTaken) {
+                throw Object.assign(new Error(phone ? 'This email is already registered' : 'Email already registered'), { statusCode: 400 });
             }
 
             // Hash password
@@ -47,7 +57,8 @@ class User {
                 id: userId,
                 username: username,
                 name: userData.name.trim(),
-                email: userData.email.toLowerCase().trim(),
+                email,
+                phone,
                 password: hashedPassword,
                 onboarding_reward_claimed: 0,
                 prints_used: 0
@@ -75,6 +86,18 @@ class User {
     static async existsByEmail(email) {
         const row = await queryOne('SELECT id FROM users WHERE LOWER(email) = ?', [String(email).trim().toLowerCase()]);
         return Boolean(row);
+    }
+
+    static async findByPhone(phone) {
+        try {
+            const data = await queryOne('SELECT * FROM users WHERE phone = ? OR email = ?', [phone, phoneToEmail(phone)]);
+            if (!data) return null;
+            const shop = await queryOne('SELECT * FROM shops WHERE user_id = ?', [data.id]);
+            return new User({ ...data, shop });
+        } catch (error) {
+            console.error('❌ Error finding user by phone:', error);
+            throw error;
+        }
     }
 
     static async findByEmail(email) {
@@ -109,7 +132,7 @@ class User {
 
     static async validatePassword(user, password) {
         try {
-            console.log('🔐 Validating password for user:', user.email);
+            console.log('🔐 Validating password for user:', user.id);
             
             const isValid = await bcrypt.compare(password, user.password);
             console.log('🔐 Password validation result:', isValid);
@@ -123,6 +146,8 @@ class User {
 
     toJSON() {
         const { password, ...userWithoutPassword } = this;
+        // The internal address of a mobile-number account is not something to show or send to the app
+        if (isPhoneEmail(userWithoutPassword.email)) userWithoutPassword.email = '';
         return userWithoutPassword;
     }
 }

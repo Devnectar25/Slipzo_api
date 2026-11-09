@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
+import { isPhoneEmail, phoneFromEmail } from '../utils/phone.js';
 import { query, queryOne, insert, update, deleteById } from '../config/database.js';
 
 const INVITE_VALID_DAYS = 7;
@@ -30,7 +31,8 @@ const newInviteFields = () => {
 // What the owner sees; the code hash never leaves the server
 const toPublic = (row) => ({
     id: row.id,
-    email: row.email,
+    email: isPhoneEmail(row.email) ? '' : row.email,
+    phone: phoneFromEmail(row.email),
     status: row.status,
     invite_expired: row.status === 'pending' && (!row.invite_code_hash || new Date(row.invite_expires_at) < new Date()),
     created_at: row.created_at,
@@ -91,7 +93,7 @@ export default class ShopStaff {
      * Returns { member } or { error } with a message safe to show.
      */
     static async join(worker, code) {
-        const invalid = { error: 'That invite code is not valid for this account. Check the code and that you are logged in with the invited email.' };
+        const invalid = { error: 'That invite code is not valid for this account. Check the code and that you are logged in with the invited mobile number or email.' };
         const email = String(worker.email || '').trim().toLowerCase();
         const rows = await query("SELECT * FROM shop_staff WHERE email = ? AND status = 'pending'", [email]);
         const pending = (rows || []).filter((r) => r.invite_code_hash);

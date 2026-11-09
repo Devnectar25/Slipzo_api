@@ -81,7 +81,10 @@ class Subscription {
         `SELECT onboarding_reward_claimed, prints_used FROM users WHERE id = ?`,
         [userId]
       ).catch(() => []);
-      const rewardClaimed = Number(userRows[0]?.onboarding_reward_claimed || 0) === 1;
+      // users.onboarding_reward_claimed: 0 = setup not finished, 1 = finished AND got the old 10 free prints (accounts made before free prints were removed keep them), 2 = finished, no free prints
+      const onboardingValue = Number(userRows[0]?.onboarding_reward_claimed || 0);
+      const onboardingDone = onboardingValue >= 1;
+      const rewardClaimed = onboardingValue === 1;
       const usedPrints = Math.max(0, Number(userRows[0]?.prints_used || 0));
 
       // 2. Get total purchased prints from subscriptions table
@@ -95,7 +98,7 @@ class Subscription {
       const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
       const latestPlan = subRows[0]?.latest_plan || null;
 
-      // 3. Base free starter prints = 10 if reward claimed, 0 otherwise
+      // 3. Only accounts that already received the old reward keep their 10 free prints; nobody new gets any
       const baseFreePrints = rewardClaimed ? 10 : 0;
       const totalPrints = baseFreePrints + purchasedPrints;
 
@@ -108,8 +111,9 @@ class Subscription {
         printsRemaining,
         availablePrints: printsRemaining,
         isFreeTier: purchasedPrints === 0,
-        activePlanName: latestPlan || (purchasedPrints > 0 ? 'Active Plan' : (rewardClaimed ? 'Free Starter Tier' : 'New Account (Pending Setup)')),
-        onboardingRewardClaimed: rewardClaimed
+        activePlanName: latestPlan || (purchasedPrints > 0 ? 'Active Plan' : (rewardClaimed ? 'Free Starter Tier' : (onboardingDone ? 'No Plan' : 'New Account (Pending Setup)'))),
+        // true once setup is finished (the name is kept so older app versions keep working)
+        onboardingRewardClaimed: onboardingDone
       };
     } catch (err) {
       console.error('Error computing quota for user:', userId, err);

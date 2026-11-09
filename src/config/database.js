@@ -157,6 +157,21 @@ export const initDatabase = async () => {
                 console.warn('⚠️ Subscriptions table migration check:', err.message);
             }
 
+            // Mobile-number sign in needs this column. It has its own steps, ahead of the long schema script
+            // below, so a failure anywhere in that script cannot leave sign up and sign in without it.
+            const ensureUserPhone = async (quiet) => {
+                try {
+                    await pgPool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT');
+                    await pgPool.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone) WHERE phone IS NOT NULL');
+                    return true;
+                } catch (err) {
+                    // Before the script below on a brand new database there is no users table yet: that is expected
+                    if (!quiet) console.error('❌ Could not add users.phone (mobile sign in will not work until this is fixed):', err.message);
+                    return false;
+                }
+            };
+            await ensureUserPhone(true);
+
             await pgPool.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
@@ -561,15 +576,6 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_templates_user_id ON templates(user_id);
                 CREATE INDEX IF NOT EXISTS idx_bills_user_id ON bills(user_id);
                 CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number);
-
-                -- Bill numbers only need to be unique inside one shop. A global unique rule made two shops that both
-                -- started at SLP-<date>-1001 collide, and the second shop's Save failed.
-                ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_number_key;
-                ALTER TABLE saved_bills DROP CONSTRAINT IF EXISTS saved_bills_number_key;
-                ALTER TABLE print_bills DROP CONSTRAINT IF EXISTS print_bills_number_key;
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_bills_user_number ON bills(user_id, number);
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_bills_user_number ON saved_bills(user_id, number);
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_print_bills_user_number ON print_bills(user_id, number);
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL;
@@ -577,6 +583,35 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
             `);
             console.log('✅ Supabase PostgreSQL Database initialized successfully!');
+            await ensureUserPhone(false);
+
+            // One payment id can only ever be recorded once. This is what stops two requests that arrive together
+            // (a double click, a retry, someone sending the same id twice) from both adding prints.
+            // Its own step: if old data already has repeats it is skipped and logged, and the controller's lock still applies.
+            try {
+                await pgPool.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriptions_payment_id ON subscriptions(payment_id) WHERE payment_id IS NOT NULL');
+            } catch (err) {
+                console.warn('⚠️ Unique payment ids not enforced by the database (existing repeats?):', err.message);
+            }
+
+            // Bill numbers only need to be unique inside one shop. A global unique rule made two shops that both
+            // started at SLP-<date>-1001 collide, and the second shop's Save failed.
+            // One transaction per table, and outside the long script above: if one of these cannot be applied
+            // (for example old data already has repeats) it is skipped and logged, and nothing else is affected.
+            for (const [table, constraint, index] of [
+                ['bills', 'bills_number_key', 'uq_bills_user_number'],
+                ['saved_bills', 'saved_bills_number_key', 'uq_saved_bills_user_number'],
+                ['print_bills', 'print_bills_number_key', 'uq_print_bills_user_number']
+            ]) {
+                try {
+                    await pgPool.query(`
+                        ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint};
+                        CREATE UNIQUE INDEX IF NOT EXISTS ${index} ON ${table}(user_id, number);
+                    `);
+                } catch (err) {
+                    console.warn(`⚠️ Per-shop bill numbers not applied to ${table}:`, err.message);
+                }
+            }
         } else {
             // Enable Foreign Keys & WAL mode for SQLite
             await sqliteRun('PRAGMA foreign_keys = ON');
@@ -596,6 +631,8 @@ export const initDatabase = async () => {
 
 
             try { await sqliteRun('ALTER TABLE users ADD COLUMN username TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN phone TEXT'); } catch (_) { }
+            try { await sqliteRun('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone) WHERE phone IS NOT NULL'); } catch (_) { }
 
             await sqliteRun(`
                 CREATE TABLE IF NOT EXISTS shops (
@@ -1013,6 +1050,7 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
+            try { await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriptions_payment_id ON subscriptions(payment_id) WHERE payment_id IS NOT NULL`); } catch (_) { }
 
             console.log('✅ SQLite 3 Database initialized successfully!');
         }

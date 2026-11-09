@@ -1,6 +1,7 @@
 import ShopStaff from '../models/ShopStaff.js';
 import User from '../models/User.js';
 import { clearStaffCache, getStaffContext } from '../middleware/auth.js';
+import { normalizePhone, phoneToEmail } from '../utils/phone.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_STAFF_PER_SHOP = 20;
@@ -15,18 +16,32 @@ export const listStaff = async (req, res, next) => {
 
 export const inviteStaff = async (req, res, next) => {
     try {
-        const email = String(req.body.email || '').trim().toLowerCase();
-        if (!EMAIL_REGEX.test(email)) {
-            return res.status(400).json({ detail: 'Please enter a valid email address.' });
+        // A worker is added by mobile number. An email still works for workers whose account was made with one.
+        const entered = String(req.body.phone ?? req.body.email ?? '').trim();
+        let email;
+        let what;
+        if (entered.includes('@')) {
+            email = entered.toLowerCase();
+            what = 'email';
+            if (!EMAIL_REGEX.test(email)) {
+                return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number.' });
+            }
+        } else {
+            const phone = normalizePhone(entered);
+            if (!phone) {
+                return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number.' });
+            }
+            email = phoneToEmail(phone);
+            what = 'mobile number';
         }
         if (email === String(req.user.email || '').toLowerCase()) {
-            return res.status(400).json({ detail: 'That is your own email. Add your worker\'s email instead.' });
+            return res.status(400).json({ detail: `That is your own ${what}. Add your worker's ${what} instead.` });
         }
         if (!(await User.existsByEmail(email))) {
-            return res.status(404).json({ detail: 'No Slipzo account found with this email. Ask your worker to sign up first, then add them again.' });
+            return res.status(404).json({ detail: `No Slipzo account found with this ${what}. Ask your worker to sign up first, then add them again.` });
         }
         if (await ShopStaff.findByOwnerAndEmail(req.user.id, email)) {
-            return res.status(409).json({ detail: 'This email has already been added.' });
+            return res.status(409).json({ detail: `This ${what} has already been added.` });
         }
         if (await ShopStaff.countForOwner(req.user.id) >= MAX_STAFF_PER_SHOP) {
             return res.status(400).json({ detail: `A shop can have up to ${MAX_STAFF_PER_SHOP} workers.` });
