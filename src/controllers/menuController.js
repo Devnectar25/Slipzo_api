@@ -5,6 +5,7 @@ import Shop from '../models/Shop.js';
 import Catalog from '../models/Catalog.js';
 import { supabase, insert, query, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
+import Inventory from '../models/Inventory.js';
 
 // Each shop type's ready-made catalog table (used to stop a custom item copying a catalog name)
 const CATALOG_TABLE_FOR_SHOP = {
@@ -193,7 +194,9 @@ export const createMenuItem = async (req, res, next) => {
             image_url, 
             description,
             barcode,
-            barcode_active 
+            barcode_active,
+            stock_qty,
+            low_stock_alert
         } = req.body;
 
         let targetMenuItemId = menu_item_id;
@@ -220,7 +223,7 @@ export const createMenuItem = async (req, res, next) => {
         // Determine item name to check for duplicate product names
         let checkName = (name && String(name).trim()) ? String(name).trim() : '';
         if (!checkName && targetMenuItemId) {
-            const catItem = await Catalog.findByBarcode(targetMenuItemId) || 
+            const catItem = await Catalog.findByBarcode(targetMenuItemId, req.user.id) || 
                             await queryOne(
                                 `SELECT name FROM small_business WHERE id = ? 
                                  UNION SELECT name FROM kirana_store WHERE id = ? 
@@ -283,6 +286,14 @@ export const createMenuItem = async (req, res, next) => {
             }
 
             const customBarcode = (barcode && String(barcode).trim()) ? String(barcode).trim() : `CUST-${Date.now().toString().slice(-6)}`;
+
+            // a barcode can be used once per shop (other shops may sell the same packet with the same printed code)
+            if (barcode && String(barcode).trim()) {
+                const sameCode = await UserMenuItem.findByBarcodeAndUser(req.user.id, customBarcode).catch(() => null);
+                if (sameCode) {
+                    return res.status(400).json({ detail: `Barcode ${customBarcode} is already used for "${sameCode.name}" in your menu` });
+                }
+            }
             const newItemId = uuidv4();
             const now = new Date().toISOString();
 
@@ -308,6 +319,9 @@ export const createMenuItem = async (req, res, next) => {
                 await insert('menu_items', masterItemData);
             } catch (tblErr) {
                 console.error('❌ Could not save custom item:', tblErr.message);
+                if (/duplicate|unique/i.test(tblErr.message || '')) {
+                    return res.status(400).json({ detail: `Barcode ${customBarcode} is already used in your menu. Enter a different barcode.` });
+                }
                 return res.status(500).json({ detail: 'Could not save this item. Please try again.' });
             }
 
@@ -315,7 +329,7 @@ export const createMenuItem = async (req, res, next) => {
         }
 
         // Add to user_menu_items
-        const userItem = await UserMenuItem.create(req.user.id, targetMenuItemId, numericPrice, isBActive);
+        const userItem = await UserMenuItem.create(req.user.id, targetMenuItemId, numericPrice, isBActive, { qty: stock_qty, lowAlert: low_stock_alert });
         res.status(201).json(userItem);
     } catch (err) {
         next(err);
@@ -329,7 +343,7 @@ export const createMenuItem = async (req, res, next) => {
 export const updateMenuItem = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { price, custom_price, is_active, barcode_active } = req.body;
+        const { price, custom_price, is_active, barcode_active, low_stock_alert, track_stock } = req.body;
 
         if (price !== undefined || custom_price !== undefined) {
             const rawPrice = custom_price !== undefined ? custom_price : price;
@@ -349,6 +363,8 @@ export const updateMenuItem = async (req, res, next) => {
         if (barcode_active !== undefined) {
             updates.barcode_active = Boolean(barcode_active);
         }
+        if (low_stock_alert !== undefined) updates.low_stock_alert = low_stock_alert;
+        if (track_stock !== undefined) updates.track_stock = track_stock;
 
         const updated = await UserMenuItem.update(id, req.user.id, updates);
 
@@ -434,7 +450,7 @@ export const lookupByBarcode = async (req, res, next) => {
         }
 
         // 2. Check master catalog across all business categories
-        const masterItem = await Catalog.findByBarcode(cleanBarcode);
+        const masterItem = await Catalog.findByBarcode(cleanBarcode, req.user.id);
         if (masterItem) {
             return res.status(422).json({
                 found: true,
@@ -484,3 +500,40 @@ export const clearUserMenu = async (req, res, next) => {
 
 
 
+
+
+/**
+ * POST /api/menu/:id/stock
+ * Body: { change } to add (+) or remove (-) stock, or { set } to set the exact count; plus optional reason and note.
+ */
+export const adjustStock = async (req, res, next) => {
+    try {
+        const { change, set, reason, note } = req.body || {};
+        const result = await Inventory.adjust(req.user.id, req.params.id, { change, set, reason, note });
+        if (!result) return res.status(404).json({ detail: 'Item not found in your menu' });
+        res.json(result);
+    } catch (err) {
+        if (err.statusCode) return res.status(err.statusCode).json({ detail: err.message });
+        next(err);
+    }
+};
+
+/** GET /api/menu/:id/stock - the item's stock and its recent movements */
+export const getStockHistory = async (req, res, next) => {
+    try {
+        const result = await Inventory.history(req.user.id, req.params.id, Number(req.query.limit) || 30);
+        if (!result) return res.status(404).json({ detail: 'Item not found in your menu' });
+        res.json(result);
+    } catch (err) {
+        next(err);
+    }
+};
+
+/** GET /api/menu/inventory/summary - counts of tracked, low and out-of-stock items and the stock value */
+export const getInventorySummary = async (req, res, next) => {
+    try {
+        res.json(await Inventory.summary(req.user.id));
+    } catch (err) {
+        next(err);
+    }
+};

@@ -6,7 +6,10 @@ import {
     updateMenuItem,
     deleteMenuItem,
     clearUserMenu,
-    lookupByBarcode
+    lookupByBarcode,
+    adjustStock,
+    getStockHistory,
+    getInventorySummary
 } from '../controllers/menuController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
@@ -17,6 +20,9 @@ router.use(authMiddleware);
 router.get('/', getMenuItems);
 router.get('/catalog', getCatalogItems);
 router.get('/barcode/:barcode', lookupByBarcode);
+router.get('/inventory/summary', getInventorySummary);
+router.get('/:id/stock', getStockHistory);
+router.post('/:id/stock', adjustStock);
 router.post('/', createMenuItem);
 router.put('/:id', updateMenuItem);
 router.delete('/:id', deleteMenuItem);

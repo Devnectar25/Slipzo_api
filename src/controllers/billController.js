@@ -3,6 +3,7 @@ import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
 import RestaurantTable from '../models/RestaurantTable.js';
+import Inventory from '../models/Inventory.js';
 
 const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
@@ -140,6 +141,9 @@ export const createBill = async (req, res, next) => {
             };
         }
         
+        // kirana / cloth shops: no bill for more than is in stock
+        await Inventory.checkBill(req.user.id, normalizedItems);
+
         // Create bill with transaction
         const bill = await Bill.create({
             user_id: req.user.id,
@@ -161,6 +165,8 @@ export const createBill = async (req, res, next) => {
             is_saved: is_saved,
             shop
         });
+
+        await Inventory.syncBill(req.user.id, bill?.id, normalizedItems, bill?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
 
         const rawTableId = table_number || table || table_name || '';
         if (!is_saved && rawTableId) {
@@ -230,6 +236,9 @@ export const updateBill = async (req, res, next) => {
             return { name, quantity, rate, barcode: item.barcode || null };
         });
 
+        // what this bill already took out of stock counts as available again
+        await Inventory.checkBill(req.user.id, normalizedItems, id);
+
         const rawTableNum = table_number || table || table_name || '';
         const cleanTableNum = rawTableNum ? String(rawTableNum).trim() : null;
 
@@ -246,6 +255,8 @@ export const updateBill = async (req, res, next) => {
             items: normalizedItems
         });
 
+        await Inventory.syncBill(req.user.id, id, normalizedItems, updated?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+
         res.json(updated);
     } catch (err) {
         if (err.message && err.message.includes('not found')) {
@@ -258,6 +269,32 @@ export const updateBill = async (req, res, next) => {
 export const getBillStats = async (req, res) => {
     const stats = await Bill.getTodaySales(req.user.id);
     res.json(stats);
+};
+
+/**
+ * GET /api/bills/analytics/today?from=<ISO of the shop's local midnight>
+ * Today's sales (the day resets at the shop's midnight) plus yesterday's totals to compare.
+ */
+export const getTodayAnalytics = async (req, res, next) => {
+    try {
+        const DAY = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        let from = new Date(String(req.query.from || ''));
+        // only a midnight within the last day is accepted; otherwise the server's own midnight
+        if (Number.isNaN(from.getTime()) || from.getTime() > now || now - from.getTime() > DAY + 60 * 60 * 1000) {
+            from = new Date();
+            from.setHours(0, 0, 0, 0);
+        }
+        const to = new Date(from.getTime() + DAY);
+        const yFrom = new Date(from.getTime() - DAY);
+        const [today, yesterday] = await Promise.all([
+            Bill.getDayAnalytics(req.user.id, from.toISOString(), to.toISOString()),
+            Bill.getDayAnalytics(req.user.id, yFrom.toISOString(), from.toISOString())
+        ]);
+        res.json({ ...today, yesterday: { total_sales: yesterday.total_sales, bill_count: yesterday.bill_count, avg_bill: yesterday.avg_bill } });
+    } catch (err) {
+        next(err);
+    }
 };
 
 export const markBillAsPrinted = async (req, res, next) => {
@@ -306,6 +343,7 @@ export const deleteBill = async (req, res, next) => {
         if (!deleted) {
             return res.status(404).json({ detail: 'Bill not found or unauthorized' });
         }
+        await Inventory.reverseBill(req.user.id, id).catch((e) => console.warn('⚠️ Stock restore for bill:', e.message));
         
         res.json({ message: 'Bill deleted successfully', id });
     } catch (err) {
