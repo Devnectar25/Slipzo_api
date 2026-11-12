@@ -80,7 +80,7 @@ export const BUILTIN_TEMPLATES_DEFS = [
         show_tax: 0,
         tax_rate: 0.00,
         footer: "Thank you for your visit! Please come again.",
-        description: "Contemporary aesthetic for boutiques, cafes, and modern shops with clean typography and spacing.",
+        description: "Contemporary design for boutiques, cafés, and salons, featuring pill badges, stylish spacing, and an Instagram handle.",
         gradient: "linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)",
         accent_color: "#0ea5e9",
         features: JSON.stringify(["Modern typography", "Clean item list with rates", "Clear amount due card", "Custom footer note"]),
