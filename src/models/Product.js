@@ -20,7 +20,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         product_link: "https://slipzo.in/products", 
         stock: 95, 
         image: "/products/hansol_rolls.jpg",
-        description: "Premium grade Hansol SUPERMAX smooth, jam-free thermal receipt rolls for clear dark printing" 
+        description: "Premium-grade Hansol SUPERMAX smooth, jam-free thermal receipt rolls for clear, dark prints." 
     },
     { 
         name: "Bluetooth POS Receipt Printer (80mm)", 
@@ -30,7 +30,7 @@ const DEFAULT_HARDWARE_PRODUCTS = [
         product_link: "https://slipzo.in/products", 
         stock: 12, 
         image: "/products/pos_printer.jpg",
-        description: "Portable 58mm wireless thermal printer for Android & iOS with rechargeable battery" 
+        description: "Portable 80mm wireless thermal printer for Android & iOS with rechargeable battery" 
     },
     { 
         name: "80mm POS Thermal Paper Rolls (10 Rolls)", 
