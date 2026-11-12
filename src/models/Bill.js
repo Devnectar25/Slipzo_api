@@ -334,6 +334,61 @@ export default class Bill {
         return bills.map(b => new Bill(b));
     }
 
+    /**
+     * One day's sales for the History page: totals, payment split, top items and every bill's time
+     * (the app groups those by its own local hour). fromIso/toIso: the shop's local day in UTC.
+     */
+    static async getDayAnalytics(userId, fromIso, toIso) {
+        const bills = await query(
+            `SELECT id, total, discount, payment_mode, created_at, 'saved' AS kind FROM saved_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?
+             UNION ALL
+             SELECT id, total, discount, payment_mode, created_at, 'printed' AS kind FROM print_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?`,
+            [userId, fromIso, toIso, userId, fromIso, toIso]
+        ).catch(() => []);
+
+        const items = await query(
+            `SELECT LOWER(TRIM(i.name)) AS k, MIN(i.name) AS name, SUM(i.quantity) AS qty, SUM(i.amount) AS amount
+             FROM (
+                SELECT si.name, si.quantity, si.amount FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
+                    WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+                UNION ALL
+                SELECT pi.name, pi.quantity, pi.amount FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
+                    WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+             ) i
+             GROUP BY LOWER(TRIM(i.name))
+             ORDER BY SUM(i.amount) DESC`,
+            [userId, fromIso, toIso, userId, fromIso, toIso]
+        ).catch(() => []);
+
+        const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+        const list = bills || [];
+        const total = list.reduce((s, b) => s + Number(b.total || 0), 0);
+        const of = (kind) => list.filter((b) => b.kind === kind);
+        const modes = new Map();
+        for (const b of list) {
+            const raw = String(b.payment_mode || 'Cash').trim();
+            const mode = /upi|gpay|phonepe|paytm/i.test(raw) ? 'UPI' : /card/i.test(raw) ? 'Card' : /cash/i.test(raw) || !raw ? 'Cash' : raw;
+            const m = modes.get(mode) || { mode, count: 0, total: 0 };
+            m.count++; m.total += Number(b.total || 0);
+            modes.set(mode, m);
+        }
+        const itemRows = (items || []).map((it) => ({ name: it.name, qty: r2(it.qty), amount: r2(it.amount) }));
+        return {
+            from: fromIso,
+            to: toIso,
+            total_sales: r2(total),
+            bill_count: list.length,
+            avg_bill: list.length ? r2(total / list.length) : 0,
+            printed: { count: of('printed').length, total: r2(of('printed').reduce((s, b) => s + Number(b.total || 0), 0)) },
+            saved: { count: of('saved').length, total: r2(of('saved').reduce((s, b) => s + Number(b.total || 0), 0)) },
+            discount_total: r2(list.reduce((s, b) => s + Number(b.discount || 0), 0)),
+            items_sold: r2(itemRows.reduce((s, it) => s + it.qty, 0)),
+            payment_modes: [...modes.values()].map((m) => ({ ...m, total: r2(m.total) })).sort((a, b) => b.total - a.total),
+            top_items: itemRows.slice(0, 5),
+            bills: list.map((b) => ({ total: r2(b.total), created_at: b.created_at }))
+        };
+    }
+
     static async getTodaySales(userId) {
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);

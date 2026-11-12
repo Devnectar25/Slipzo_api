@@ -19,6 +19,11 @@ export default class UserMenuItem {
         this.is_available = data.is_available !== undefined ? Boolean(data.is_available) : true;
         this.is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
         this.business_type = data.business_type || 'small_business';
+        // stock (inventory shops): null stock_qty = not tracked yet
+        const rawTrack = data.track_stock;
+        this.track_stock = rawTrack === true || rawTrack === 1 || rawTrack === '1' || rawTrack === 't' || rawTrack === 'true';
+        this.stock_qty = data.stock_qty === null || data.stock_qty === undefined ? null : Number(data.stock_qty);
+        this.low_stock_alert = data.low_stock_alert === null || data.low_stock_alert === undefined ? 5 : Number(data.low_stock_alert);
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
@@ -33,6 +38,9 @@ export default class UserMenuItem {
                 umi.custom_price as price,
                 umi.is_active,
                 COALESCE(umi.barcode_active, true) as barcode_active,
+                umi.stock_qty,
+                umi.low_stock_alert,
+                umi.track_stock,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -95,6 +103,9 @@ export default class UserMenuItem {
                 umi.custom_price as price,
                 umi.is_active,
                 COALESCE(umi.barcode_active, true) as barcode_active,
+                umi.stock_qty,
+                umi.low_stock_alert,
+                umi.track_stock,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -129,6 +140,9 @@ export default class UserMenuItem {
                 umi.custom_price as price,
                 umi.is_active,
                 COALESCE(umi.barcode_active, true) as barcode_active,
+                umi.stock_qty,
+                umi.low_stock_alert,
+                umi.track_stock,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -159,7 +173,7 @@ export default class UserMenuItem {
         return data || null;
     }
 
-    static async create(userId, menuItemId, customPrice, barcodeActive = true) {
+    static async create(userId, menuItemId, customPrice, barcodeActive = true, stock = null) {
         const isBActive = barcodeActive !== false;
         const existing = await UserMenuItem.findByUserAndMenuItem(userId, menuItemId);
         if (existing) {
@@ -218,8 +232,28 @@ export default class UserMenuItem {
             created_at: now,
             updated_at: now
         };
+        const openingQty = stock && stock.qty !== undefined && stock.qty !== null && stock.qty !== '' ? Number(stock.qty) : null;
+        if (openingQty !== null && Number.isFinite(openingQty)) {
+            newItem.track_stock = true;
+            newItem.stock_qty = Math.max(0, openingQty);
+        }
+        if (stock && stock.lowAlert !== undefined && stock.lowAlert !== null && stock.lowAlert !== '' && Number.isFinite(Number(stock.lowAlert))) {
+            newItem.low_stock_alert = Math.max(0, Number(stock.lowAlert));
+        }
 
         await insert('user_menu_items', newItem);
+        if (newItem.track_stock) {
+            await insert('stock_movements', {
+                id: uuidv4(),
+                user_id: userId,
+                user_menu_item_id: id,
+                change: newItem.stock_qty,
+                balance_after: newItem.stock_qty,
+                reason: 'opening',
+                note: 'Opening stock',
+                created_at: now
+            }).catch(() => null);
+        }
         return await UserMenuItem.findByIdAndUser(id, userId);
     }
 
@@ -237,6 +271,12 @@ export default class UserMenuItem {
         }
         if (updates.barcode_active !== undefined) {
             updateFields.barcode_active = Boolean(updates.barcode_active);
+        }
+        if (updates.low_stock_alert !== undefined && updates.low_stock_alert !== null && updates.low_stock_alert !== '' && Number.isFinite(Number(updates.low_stock_alert))) {
+            updateFields.low_stock_alert = Math.max(0, Number(updates.low_stock_alert));
+        }
+        if (updates.track_stock !== undefined) {
+            updateFields.track_stock = Boolean(updates.track_stock);
         }
         updateFields.updated_at = new Date().toISOString();
 

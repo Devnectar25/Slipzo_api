@@ -100,14 +100,18 @@ export default class Catalog {
     /**
      * Search for a master item by barcode across all 4 catalog tables
      */
-    static async findByBarcode(barcode) {
+    // userId: menu_items also holds shops' own custom items; only the asking shop's (or shared ones) are matched
+    static async findByBarcode(barcode, userId = null) {
         if (!barcode || !String(barcode).trim()) return null;
         const clean = String(barcode).trim();
 
         const tables = ['small_business', 'menu_items', 'clothing_garments', 'hotel_food', 'kirana_store'];
         for (const table of tables) {
-            const sql = `SELECT * FROM ${table} WHERE LOWER(barcode) = LOWER(?) LIMIT 1`;
-            const row = await queryOne(sql, [clean]);
+            const own = table === 'menu_items'
+            const sql = own
+                ? 'SELECT * FROM menu_items WHERE LOWER(barcode) = LOWER(?) AND (user_id IS NULL OR user_id = ?) LIMIT 1'
+                : `SELECT * FROM ${table} WHERE LOWER(barcode) = LOWER(?) LIMIT 1`;
+            const row = await queryOne(sql, own ? [clean, userId] : [clean]);
             if (row) return row;
         }
         return null;

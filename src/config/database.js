@@ -126,6 +126,64 @@ function formatDbError(err) {
 // Initialize database schema
 let isDbInitialized = false;
 
+// Inventory (stock) for Kirana and Clothing shops. Runs on every start-up, including the fast path below,
+// and only changes the database when a column or the table is actually missing.
+export const ensureInventorySchema = async () => {
+    try {
+        if (isPg) {
+            const cols = await pgPool.query(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'user_menu_items' AND column_name IN ('stock_qty', 'low_stock_alert', 'track_stock')"
+            );
+            if ((cols.rowCount || 0) < 3) {
+                await pgPool.query(`
+                    ALTER TABLE user_menu_items ADD COLUMN IF NOT EXISTS stock_qty NUMERIC(12,2);
+                    ALTER TABLE user_menu_items ADD COLUMN IF NOT EXISTS low_stock_alert NUMERIC(12,2) DEFAULT 5;
+                    ALTER TABLE user_menu_items ADD COLUMN IF NOT EXISTS track_stock BOOLEAN DEFAULT FALSE;
+                `);
+            }
+            const table = await pgPool.query("SELECT to_regclass('public.stock_movements') AS t");
+            if (!table.rows[0]?.t) {
+                await pgPool.query(`
+                    CREATE TABLE IF NOT EXISTS stock_movements (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        user_menu_item_id TEXT NOT NULL,
+                        change NUMERIC(12,2) NOT NULL,
+                        balance_after NUMERIC(12,2),
+                        reason TEXT NOT NULL,
+                        bill_id TEXT,
+                        note TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_stock_movements_item ON stock_movements(user_menu_item_id, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_stock_movements_bill ON stock_movements(bill_id);
+                `);
+            }
+            const oldIdx = await pgPool.query("SELECT 1 FROM pg_indexes WHERE tablename = 'menu_items' AND indexname = 'idx_menu_items_barcode'");
+            if (oldIdx.rowCount) {
+                await pgPool.query(`
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_user_barcode ON menu_items(user_id, barcode) WHERE barcode IS NOT NULL;
+                    DROP INDEX IF EXISTS idx_menu_items_barcode;
+                `);
+            }
+        } else {
+            for (const sql of [
+                'ALTER TABLE user_menu_items ADD COLUMN stock_qty REAL',
+                'ALTER TABLE user_menu_items ADD COLUMN low_stock_alert REAL DEFAULT 5',
+                'ALTER TABLE user_menu_items ADD COLUMN track_stock INTEGER DEFAULT 0'
+            ]) {
+                try { await sqliteRun(sql); } catch (_) { /* already there */ }
+            }
+            await sqliteRun(`CREATE TABLE IF NOT EXISTS stock_movements (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, user_menu_item_id TEXT NOT NULL, change REAL NOT NULL,
+                balance_after REAL, reason TEXT NOT NULL, bill_id TEXT, note TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`);
+        }
+    } catch (err) {
+        console.warn('⚠️ Inventory schema check:', err.message);
+    }
+};
+
 export const initDatabase = async () => {
     if (isDbInitialized) return;
     try {
@@ -135,6 +193,7 @@ export const initDatabase = async () => {
                 const check = await pgPool.query("SELECT to_regclass('public.users') as u, to_regclass('public.shops') as s");
                 if (check.rows[0]?.u && check.rows[0]?.s) {
                     console.log('⚡ Database schema already initialized, skipping heavy DDL migrations.');
+                    await ensureInventorySchema();
                     isDbInitialized = true;
                     return;
                 }
@@ -589,7 +648,7 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number);
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_user_barcode ON menu_items(user_id, barcode) WHERE barcode IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email);
                 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
             `);
@@ -1058,13 +1117,15 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_menu_items_user_id ON menu_items(user_id)`);
-            await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_barcode ON menu_items(barcode) WHERE barcode IS NOT NULL`);
+            await sqliteRun(`DROP INDEX IF EXISTS idx_menu_items_barcode`);
+            await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_user_barcode ON menu_items(user_id, barcode) WHERE barcode IS NOT NULL`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)`);
             try { await sqliteRun(`CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriptions_payment_id ON subscriptions(payment_id) WHERE payment_id IS NOT NULL`); } catch (_) { }
 
             console.log('✅ SQLite 3 Database initialized successfully!');
         }
+        await ensureInventorySchema();
         isDbInitialized = true;
     } catch (err) {
         console.error('❌ Failed to initialize database:', err.message);
