@@ -82,18 +82,23 @@ export const revokeStaff = async (req, res, next) => {
 
 export const joinShop = async (req, res, next) => {
     try {
+        const worker = req.authUser || req.user;
         const code = String(req.body.code || '').trim();
         if (!code) return res.status(400).json({ detail: 'Please enter your invite code.' });
 
         // An owner with workers joining another shop would leave those workers pointing at the wrong data
-        if (await ShopStaff.hasActiveWorkers(req.user.id)) {
+        if (await ShopStaff.hasActiveWorkers(worker.id)) {
             return res.status(400).json({ detail: 'You have workers on your own shop. Remove them before joining another shop.' });
         }
 
-        const result = await ShopStaff.join(req.user, code);
+        if (await ShopStaff.findActiveByWorker(worker.id)) {
+            return res.status(400).json({ detail: 'You are already a worker for a shop. Leave it before joining another shop.' });
+        }
+
+        const result = await ShopStaff.join(worker, code);
         if (result.error) return res.status(400).json({ detail: result.error });
 
-        clearStaffCache(req.user.id);
+        clearStaffCache(worker.id);
         const owner = await User.findById(result.ownerId);
         res.json({ success: true, staff_of: { shop_name: owner?.shop?.name || owner?.name || 'Shop' } });
     } catch (err) {

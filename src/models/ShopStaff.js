@@ -65,7 +65,7 @@ export default class ShopStaff {
 
     /** Active membership of a worker, or null. */
     static async findActiveByWorker(workerId) {
-        return await queryOne("SELECT * FROM shop_staff WHERE worker_user_id = ? AND status = 'active'", [workerId]);
+        return await queryOne("SELECT * FROM shop_staff WHERE worker_user_id = ? AND status = 'active' ORDER BY accepted_at DESC, created_at DESC LIMIT 1", [workerId]);
     }
 
     static async invite(ownerId, email) {

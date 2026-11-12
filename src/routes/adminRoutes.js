@@ -1,4 +1,5 @@
 import express from 'express';
+import Subscription from '../models/Subscription.js';
 import jwt from 'jsonwebtoken';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { query, queryOne, supabase } from '../config/database.js';
@@ -155,7 +156,15 @@ router.get('/users', adminAuthMiddleware, async (req, res) => {
         sql += ` ORDER BY u.created_at DESC`;
 
         const users = await query(sql, params);
-        return res.json({ users: users || [] });
+        const list = users || [];
+        await Promise.all(list.map(async (u) => {
+            const quota = await Subscription.getQuotaByUserId(u.id).catch(() => null);
+            u.prints_total = quota ? quota.totalPrints : 0;
+            u.prints_used = quota ? quota.usedPrints : 0;
+            u.prints_remaining = quota ? quota.printsRemaining : 0;
+            u.plan_name = quota ? quota.activePlanName : null;
+        }));
+        return res.json({ users: list });
     } catch (err) {
         console.error('❌ Error fetching users for admin:', err);
         return res.status(500).json({ detail: 'Failed to fetch users' });
@@ -602,14 +611,33 @@ router.post('/users/:id/grant-prints', adminAuthMiddleware, async (req, res) => 
         const userId = req.params.id;
         const count = parseInt(printsToGrant || 500);
 
-        if (isNaN(count) || count <= 0) {
+        if (isNaN(count) || count <= 0 || count > 1000000) {
             return res.status(400).json({ detail: 'Invalid print count' });
         }
 
+        const userRows = await query('SELECT id, name, email FROM users WHERE id = ? LIMIT 1', [userId]);
+        const user = userRows && userRows[0];
+        if (!user) {
+            return res.status(404).json({ detail: 'User not found' });
+        }
+
+        await Subscription.create({
+            user_id: user.id,
+            user_name: user.name,
+            user_email: user.email,
+            plan_name: 'Admin Grant',
+            amount: 0,
+            prints_count: count,
+            payment_id: `ADMIN_GRANT_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            payment_status: 'completed'
+        });
+
+        const quota = await Subscription.getQuotaByUserId(user.id);
         return res.json({
-            detail: `Successfully granted ${count} print credits to user shop`,
+            detail: `Granted ${count.toLocaleString('en-IN')} prints. ${user.name || 'The user'} now has ${quota.printsRemaining.toLocaleString('en-IN')} prints left.`,
             granted: count,
-            userId
+            userId: user.id,
+            quota
         });
     } catch (err) {
         console.error('❌ Error granting print credits:', err);
