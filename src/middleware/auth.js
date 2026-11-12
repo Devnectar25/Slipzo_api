@@ -103,12 +103,19 @@ const applyIdentity = async (req, res, user) => {
     return true;
 };
 
-export const authMiddleware = async (req, res, next) => {
-    let token = req.cookies?.token;
-    if (!token && req.headers.authorization) {
+const extractToken = (req) => {
+    if (req.headers.authorization) {
         const authHeader = req.headers.authorization;
-        token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+        const headerToken = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+        if (headerToken && headerToken !== 'null' && headerToken !== 'undefined') {
+            return headerToken;
+        }
     }
+    return req.cookies?.token || null;
+};
+
+export const authMiddleware = async (req, res, next) => {
+    const token = extractToken(req);
     
     if (!token) {
         return res.status(401).json({ detail: 'Authentication required' });
@@ -128,11 +135,7 @@ export const authMiddleware = async (req, res, next) => {
 };
 
 export const optionalAuth = async (req, res, next) => {
-    let token = req.cookies?.token;
-    if (!token && req.headers.authorization) {
-        const authHeader = req.headers.authorization;
-        token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
-    }
+    const token = extractToken(req);
     if (token) {
         try {
             const decoded = verifyToken(token);

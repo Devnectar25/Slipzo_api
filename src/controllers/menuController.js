@@ -6,6 +6,15 @@ import Catalog from '../models/Catalog.js';
 import { supabase, insert, query, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
 
+// Each shop type's ready-made catalog table (used to stop a custom item copying a catalog name)
+const CATALOG_TABLE_FOR_SHOP = {
+  small_business: 'small_business',
+  kirana_grocery: 'kirana_store',
+  clothing_garments: 'clothing_garments',
+  hotel_food: 'hotel_food',
+};
+const SHOP_TYPES = Object.keys(CATALOG_TABLE_FOR_SHOP);
+
 /**
  * Maps category selection string to the appropriate database table and Supabase storage bucket
  */
@@ -250,13 +259,20 @@ export const createMenuItem = async (req, res, next) => {
                 return res.status(400).json({ detail: 'Item name is required' });
             }
 
-            const { tableName, bucketName } = getCategoryTableAndBucket(category);
+            // A custom item belongs to the shop's own type, whatever its category is called ("Starters",
+            // "General", ...). It used to go to a table picked from the category name, which tagged it with the
+            // wrong shop type, so the menu (filtered by shop type) never showed it.
+            const ownShop = await Shop.findByUserId(req.user.id);
+            const rawShopType = String(ownShop?.business_type || '').trim().toLowerCase();
+            const shopType = SHOP_TYPES.includes(rawShopType) ? rawShopType : 'small_business';
+            const tableName = CATALOG_TABLE_FOR_SHOP[shopType];
+            const { bucketName } = getCategoryTableAndBucket(shopType);
 
-            // Prevent adding custom item with duplicate name in the catalog table
+            // Prevent adding custom item with duplicate name in the shop's catalog
             const catalogNameCheck = await queryOne(
                 `SELECT id, name FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`,
                 [name.trim()]
-            );
+            ).catch(() => null);
             if (catalogNameCheck) {
                 return res.status(400).json({ detail: `Product "${name.trim()}" already exists in the catalog. You can add it directly.` });
             }
@@ -273,6 +289,7 @@ export const createMenuItem = async (req, res, next) => {
             const masterItemData = {
                 id: newItemId,
                 user_id: req.user.id,
+                business_type: shopType,
                 name: name.trim(),
                 price: numericPrice,
                 category: (category || '').trim() || 'General',
@@ -285,12 +302,13 @@ export const createMenuItem = async (req, res, next) => {
                 updated_at: now
             };
 
-            // Save record into the target category database table
+            // Custom items live in menu_items (the table for items a shop owner made; it has user_id).
+            // A failure is reported to the app instead of being swallowed, so "saved" always means saved.
             try {
-                await insert(tableName, masterItemData);
+                await insert('menu_items', masterItemData);
             } catch (tblErr) {
-                console.warn(`⚠️ Insert into table '${tableName}' warning:`, tblErr.message);
-                await insert('small_business', masterItemData).catch(() => null);
+                console.error('❌ Could not save custom item:', tblErr.message);
+                return res.status(500).json({ detail: 'Could not save this item. Please try again.' });
             }
 
             targetMenuItemId = newItemId;

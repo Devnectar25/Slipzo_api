@@ -6,6 +6,46 @@ import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
 import { normalizePhone, isPhoneEmail } from '../utils/phone.js';
 
+export const checkAvailability = async (req, res, next) => {
+    try {
+        const { phone: rawPhone, email } = req.body || {};
+        const phone = rawPhone ? normalizePhone(rawPhone) : null;
+
+        if (!rawPhone || !phone) {
+            return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number' });
+        }
+
+        const existing = await User.findByPhone(phone);
+        if (existing) {
+            const quota = await Subscription.getQuotaByUserId(existing.id);
+            const worksForAShop = await getStaffContext(existing.id);
+            const unfinished = quota.isFreeTier && !quota.onboardingRewardClaimed && !worksForAShop;
+            if (unfinished) {
+                return res.status(409).json({
+                    detail: 'You already started signing up with this mobile number. Sign in with the password you chose to continue.',
+                    code: 'SIGNUP_IN_PROGRESS'
+                });
+            }
+            return res.status(409).json({
+                detail: 'This mobile number is already registered',
+                code: 'MOBILE_TAKEN'
+            });
+        }
+
+        const trimmedEmail = typeof email === 'string' ? email.trim() : '';
+        if (trimmedEmail && await User.existsByEmail(trimmedEmail)) {
+            return res.status(409).json({
+                detail: 'This email is already registered',
+                code: 'EMAIL_TAKEN'
+            });
+        }
+
+        return res.json({ available: true });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const register = async (req, res, next) => {
     try {
         console.log('📝 Registration request received');
@@ -86,15 +126,12 @@ export const register = async (req, res, next) => {
                 }
                 const resumed = await User.findByPhone(phone);
                 const resumeToken = generateToken(existing.id);
-                const resumeProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
                 res.cookie('token', resumeToken, {
-                    httpOnly: true,
-                    secure: resumeProd,
-                    sameSite: resumeProd ? 'none' : 'lax',
+                    ...getTokenCookieOptions(),
                     maxAge: 7 * 24 * 60 * 60 * 1000
                 });
                 console.log('↩️ Sign up resumed for unfinished account:', existing.id);
-                return res.status(200).json({ ...resumed.toJSON(), token: resumeToken, resumed: true });
+                return res.status(200).json({ ...resumed.toJSON(), staff_of: await getStaffContext(existing.id), token: resumeToken, resumed: true });
             }
             // A finished account falls through to the normal "already registered" answer below
         }
@@ -129,15 +166,12 @@ export const register = async (req, res, next) => {
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         
-        const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
         res.cookie('token', token, {
-            httpOnly: true,
-            secure: isProd,
-            sameSite: isProd ? 'none' : 'lax',
+            ...getTokenCookieOptions(),
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
-        const userData = { ...user.toJSON(), token };
+        const userData = { ...user.toJSON(), staff_of: await getStaffContext(user.id), token };
         console.log('✅ Registration complete, returning user data');
         res.status(201).json(userData);
     } catch (err) {
@@ -201,11 +235,8 @@ export const login = async (req, res, next) => {
         const token = generateToken(user.id);
         console.log('✅ Token generated');
         
-        const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
         res.cookie('token', token, {
-            httpOnly: true,
-            secure: isProd,
-            sameSite: isProd ? 'none' : 'lax',
+            ...getTokenCookieOptions(),
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
@@ -217,8 +248,18 @@ export const login = async (req, res, next) => {
     }
 };
 
+function getTokenCookieOptions() {
+    const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+    return {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: isProd ? 'none' : 'lax',
+        path: '/'
+    };
+}
+
 export const logout = (req, res) => {
-    res.clearCookie('token');
+    res.clearCookie('token', getTokenCookieOptions());
     res.json({ message: 'Logged out successfully' });
 };
 

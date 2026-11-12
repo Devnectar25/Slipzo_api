@@ -55,7 +55,13 @@ export default class UserMenuItem {
         const params = [userId];
 
         if (businessType && businessType !== 'all' && businessType !== 'All') {
-            sql += ` AND LOWER(COALESCE(sb.business_type, mi.business_type, cg.business_type, hf.business_type, ks.business_type, 'small_business')) = LOWER(?)`;
+            // Items the shop owner created themselves always show, whichever type they were tagged with
+            // (older custom items were often saved under the wrong type and would otherwise stay hidden)
+            sql += ` AND (
+                LOWER(COALESCE(sb.business_type, mi.business_type, cg.business_type, hf.business_type, ks.business_type, 'small_business')) = LOWER(?)
+                OR sb.user_id = umi.user_id
+                OR mi.user_id = umi.user_id
+            )`;
             params.push(businessType.trim());
         }
 
