@@ -5,6 +5,7 @@ import Subscription from '../models/Subscription.js';
 import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
 import { normalizePhone, isPhoneEmail } from '../utils/phone.js';
+import Otp from '../models/Otp.js';
 
 export const checkAvailability = async (req, res, next) => {
     try {
@@ -84,6 +85,14 @@ export const register = async (req, res, next) => {
             console.log('❌ Password does not meet security requirements');
             return res.status(400).json({ 
                 detail: 'Password must be at least 8 characters and include uppercase, lowercase, number, and special character' 
+            });
+        }
+
+        // The phone must have been confirmed with the code sent to it (OTP_REQUIRED_FOR_SIGNUP=false turns this off)
+        if (process.env.OTP_REQUIRED_FOR_SIGNUP !== 'false' && !Otp.checkToken(req.body.otp_token, phone, 'register')) {
+            return res.status(400).json({
+                detail: 'Please verify your mobile number with the code we sent.',
+                code: 'OTP_REQUIRED'
             });
         }
 

@@ -226,7 +226,12 @@ export const consumePrint = async (req, res, next) => {
       [userId]
     );
 
-    const updatedQuota = await Subscription.getQuotaByUserId(userId);
+    const updatedQuota = {
+      ...currentQuota,
+      usedPrints: (Number(currentQuota.usedPrints) || 0) + 1,
+      printsRemaining: Math.max(0, (Number(currentQuota.printsRemaining) || 0) - 1),
+      availablePrints: Math.max(0, (Number(currentQuota.availablePrints) || 0) - 1)
+    };
     console.log(`🖨️ Print credit consumed: User [${userId}] | Remaining: ${updatedQuota.printsRemaining} | Used: ${updatedQuota.usedPrints}`);
 
     return res.status(200).json({

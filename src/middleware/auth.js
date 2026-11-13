@@ -114,6 +114,14 @@ const extractToken = (req) => {
     return req.cookies?.token || null;
 };
 
+// A token from before the last password change (forgot password) no longer signs anyone in.
+// Tokens carry whole seconds, so one issued in the same second as the change still counts.
+export const signedInBeforePasswordChange = (decoded, user) => {
+    if (!user?.password_changed_at || !decoded?.iat) return false;
+    const changed = new Date(user.password_changed_at).getTime();
+    return Number.isFinite(changed) && (decoded.iat + 1) * 1000 <= changed;
+};
+
 export const authMiddleware = async (req, res, next) => {
     const token = extractToken(req);
     
@@ -130,6 +138,9 @@ export const authMiddleware = async (req, res, next) => {
     if (!user) {
         return res.status(401).json({ detail: 'User not found' });
     }
+    if (signedInBeforePasswordChange(decoded, user)) {
+        return res.status(401).json({ detail: 'Your password was changed. Please sign in again.', code: 'PASSWORD_CHANGED' });
+    }
     
     if (await applyIdentity(req, res, user)) next();
 };
@@ -141,6 +152,7 @@ export const optionalAuth = async (req, res, next) => {
             const decoded = verifyToken(token);
             if (decoded) {
                 const user = await getCachedUser(decoded.userId);
+                if (user && signedInBeforePasswordChange(decoded, user)) return next();
                 if (user && !(await applyIdentity(req, res, user))) return;
             }
         } catch (_) {}
