@@ -48,19 +48,18 @@ export default class Bill {
             billNumber = generateBillNumber(prefix, currentSeq, format);
         }
 
-        // Pre-check uniqueness of billNumber, incrementing sequence if already taken
-        // (bills live in saved_bills / print_bills; the old "bills" table is not where new bills go)
-        const numberTaken = (num) => queryOne(
-            'SELECT id FROM saved_bills WHERE number = ? AND user_id = ? UNION ALL SELECT id FROM print_bills WHERE number = ? AND user_id = ? LIMIT 1',
-            [num, billData.user_id, num, billData.user_id]
-        );
-        let existing = await numberTaken(billNumber);
+        // Pre-check uniqueness of billNumber in a single round-trip:
+        const existingNumbers = await query(
+            'SELECT number FROM saved_bills WHERE user_id = ? UNION ALL SELECT number FROM print_bills WHERE user_id = ?',
+            [billData.user_id, billData.user_id]
+        ).catch(() => []);
+        const takenSet = new Set((existingNumbers || []).map(r => r.number));
+
         let attempts = 0;
-        while (existing && attempts < 100) {
+        while (takenSet.has(billNumber) && attempts < 1000) {
             attempts++;
             currentSeq++;
             billNumber = generateBillNumber(prefix, currentSeq, format);
-            existing = await numberTaken(billNumber);
         }
 
         let insertedBillId = null;
@@ -71,29 +70,32 @@ export default class Bill {
             const connection = await beginTransaction();
 
             try {
-                // Atomic print quota verification inside transaction
-                const subRows = await connection.query(
-                    `SELECT SUM(prints_count) as total_purchased FROM subscriptions WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)`,
-                    [billData.user_id]
-                );
-                const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
-                const totalPrints = 10 + purchasedPrints;
+                const isSaved = billData.is_saved !== undefined ? Boolean(billData.is_saved) : false;
 
-                const billRows = await connection.query(
-                    `SELECT ((SELECT COUNT(*) FROM saved_bills WHERE user_id = ?) + (SELECT COUNT(*) FROM print_bills WHERE user_id = ?)) as used_count`,
-                    [billData.user_id, billData.user_id]
-                );
-                const usedPrints = Number(billRows[0]?.used_count || 0);
+                // Atomic print quota verification inside transaction (only for printed bills, saving drafts does not consume print quota)
+                if (!isSaved) {
+                    const subRows = await connection.query(
+                        `SELECT SUM(prints_count) as total_purchased FROM subscriptions WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)`,
+                        [billData.user_id]
+                    );
+                    const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
+                    const totalPrints = 10 + purchasedPrints;
 
-                if (totalPrints - usedPrints <= 0) {
-                    const quotaErr = new Error('Print quota limit reached. You have 0 prints remaining. Please purchase a plan to create more bills.');
-                    quotaErr.statusCode = 403;
-                    throw quotaErr;
+                    const billRows = await connection.query(
+                        `SELECT COUNT(*) as used_count FROM print_bills WHERE user_id = ?`,
+                        [billData.user_id]
+                    );
+                    const usedPrints = Number(billRows[0]?.used_count || 0);
+
+                    if (totalPrints - usedPrints <= 0) {
+                        const quotaErr = new Error('Print quota limit reached. You have 0 prints remaining. Please purchase a plan to create more bills.');
+                        quotaErr.statusCode = 403;
+                        throw quotaErr;
+                    }
                 }
 
                 const rawTableNum = billData.table_number || billData.table || billData.table_name || '';
                 const cleanTableNum = rawTableNum ? String(rawTableNum).trim() : null;
-                const isSaved = billData.is_saved !== undefined ? Boolean(billData.is_saved) : false;
                 const mainTable = isSaved ? 'saved_bills' : 'print_bills';
                 const mainItemsTable = isSaved ? 'saved_bill_items' : 'print_bill_items';
 
@@ -129,33 +131,30 @@ export default class Bill {
                     values
                 );
 
-                // Insert bill items snapshot into target separated items table ONLY
-                for (const item of billData.items) {
-                    const itemData = {
-                        id: uuidv4(),
-                        bill_id: bill.id,
-                        name: item.name,
-                        barcode: item.barcode || null,
-                        quantity: Number(item.quantity) || 1,
-                        rate: Number(item.rate) || 0,
-                        amount: (Number(item.quantity) || 1) * (Number(item.rate) || 0)
-                    };
-                    
-                    const itemKeys = Object.keys(itemData);
-                    const itemValues = Object.values(itemData);
-                    const itemPlaceholders = itemKeys.map(() => '?').join(', ');
-                    
+                // Insert bill items snapshot into target separated items table using ONE batch insert
+                if (billData.items && billData.items.length > 0) {
+                    const itemPlaceholders = [];
+                    const itemValues = [];
+                    for (const item of billData.items) {
+                        itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
+                        itemValues.push(
+                            uuidv4(),
+                            bill.id,
+                            item.name,
+                            item.barcode || null,
+                            Number(item.quantity) || 1,
+                            Number(item.rate) || 0,
+                            (Number(item.quantity) || 1) * (Number(item.rate) || 0)
+                        );
+                    }
                     await connection.query(
-                        `INSERT INTO ${mainItemsTable} (${itemKeys.join(', ')}) VALUES (${itemPlaceholders})`,
+                        `INSERT INTO ${mainItemsTable} (id, bill_id, name, barcode, quantity, rate, amount) VALUES ${itemPlaceholders.join(', ')}`,
                         itemValues
                     );
                 }
 
                 // Increment shop's invoice sequence safely
-                const shopRows = await connection.query('SELECT invoice_sequence FROM shops WHERE user_id = ?', [billData.user_id]);
-                const dbShopSeq = Number(shopRows[0]?.invoice_sequence || 1000);
-                const nextShopSeq = Math.max(dbShopSeq + 1, currentSeq + 1);
-
+                const nextShopSeq = Math.max((Number(shopInfo.invoice_sequence) || 1000) + 1, currentSeq + 1);
                 await connection.query(
                     `UPDATE shops SET invoice_sequence = ? WHERE user_id = ?`,
                     [nextShopSeq, billData.user_id]
@@ -338,7 +337,7 @@ export default class Bill {
      * One day's sales for the History page: totals, payment split, top items and every bill's time
      * (the app groups those by its own local hour). fromIso/toIso: the shop's local day in UTC.
      */
-    static async getDayAnalytics(userId, fromIso, toIso) {
+    static async getDayAnalytics(userId, fromIso, toIso, { includeItems = true } = {}) {
         const bills = await query(
             `SELECT id, total, discount, payment_mode, created_at, 'saved' AS kind FROM saved_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?
              UNION ALL
@@ -346,19 +345,22 @@ export default class Bill {
             [userId, fromIso, toIso, userId, fromIso, toIso]
         ).catch(() => []);
 
-        const items = await query(
-            `SELECT LOWER(TRIM(i.name)) AS k, MIN(i.name) AS name, SUM(i.quantity) AS qty, SUM(i.amount) AS amount
-             FROM (
-                SELECT si.name, si.quantity, si.amount FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
-                    WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
-                UNION ALL
-                SELECT pi.name, pi.quantity, pi.amount FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
-                    WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
-             ) i
-             GROUP BY LOWER(TRIM(i.name))
-             ORDER BY SUM(i.amount) DESC`,
-            [userId, fromIso, toIso, userId, fromIso, toIso]
-        ).catch(() => []);
+        let items = [];
+        if (includeItems) {
+            items = await query(
+                `SELECT LOWER(TRIM(i.name)) AS k, MIN(i.name) AS name, SUM(i.quantity) AS qty, SUM(i.amount) AS amount
+                 FROM (
+                    SELECT si.name, si.quantity, si.amount FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
+                        WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+                    UNION ALL
+                    SELECT pi.name, pi.quantity, pi.amount FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
+                        WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+                 ) i
+                 GROUP BY LOWER(TRIM(i.name))
+                 ORDER BY SUM(i.amount) DESC`,
+                [userId, fromIso, toIso, userId, fromIso, toIso]
+            ).catch(() => []);
+        }
 
         const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
         const list = bills || [];
@@ -562,24 +564,24 @@ export default class Bill {
             // Delete old saved items
             await connection.query('DELETE FROM saved_bill_items WHERE bill_id = ?', [id]).catch(() => {});
 
-            // Insert updated saved items
-            for (const item of billData.items) {
-                const itemData = {
-                    id: uuidv4(),
-                    bill_id: id,
-                    name: item.name,
-                    barcode: item.barcode || null,
-                    quantity: Number(item.quantity) || 1,
-                    rate: Number(item.rate) || 0,
-                    amount: (Number(item.quantity) || 1) * (Number(item.rate) || 0)
-                };
-
-                const itemKeys = Object.keys(itemData);
-                const itemValues = Object.values(itemData);
-                const itemPlaceholders = itemKeys.map(() => '?').join(', ');
-
+            // Insert updated saved items in a single batch query
+            if (billData.items && billData.items.length > 0) {
+                const itemPlaceholders = [];
+                const itemValues = [];
+                for (const item of billData.items) {
+                    itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
+                    itemValues.push(
+                        uuidv4(),
+                        id,
+                        item.name,
+                        item.barcode || null,
+                        Number(item.quantity) || 1,
+                        Number(item.rate) || 0,
+                        (Number(item.quantity) || 1) * (Number(item.rate) || 0)
+                    );
+                }
                 await connection.query(
-                    `INSERT INTO saved_bill_items (${itemKeys.join(', ')}) VALUES (${itemPlaceholders})`,
+                    `INSERT INTO saved_bill_items (id, bill_id, name, barcode, quantity, rate, amount) VALUES ${itemPlaceholders.join(', ')}`,
                     itemValues
                 ).catch(() => {});
             }

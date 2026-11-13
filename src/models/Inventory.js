@@ -68,8 +68,8 @@ export default class Inventory {
      * Refuses a bill that asks for more than is in stock. For an edited bill, what that bill already took
      * out counts as available again. Throws a 400 error naming the first item that is short.
      */
-    static async checkBill(userId, items, billId = null) {
-        const shop = await Shop.findByUserId(userId);
+    static async checkBill(userId, items, billId = null, shop = null) {
+        if (!shop) shop = await Shop.findByUserId(userId);
         if (!isInventoryType(shop?.business_type)) return;
         const totals = await trackedTotals(userId, items);
         if (!totals.size) return;
@@ -153,9 +153,9 @@ export default class Inventory {
     }
 
     /** Takes a bill's items out of stock. Re-running it for the same bill (after an edit) first puts the old items back. */
-    static async syncBill(userId, billId, items, billNumber) {
+    static async syncBill(userId, billId, items, billNumber, shop = null) {
         if (!billId) return;
-        const shop = await Shop.findByUserId(userId);
+        if (!shop) shop = await Shop.findByUserId(userId);
         if (!isInventoryType(shop?.business_type)) return;
 
         await Inventory.reverseBill(userId, billId);

@@ -184,6 +184,44 @@ export const ensureInventorySchema = async () => {
     }
 };
 
+/** Codes sent to a phone (sign up and forgot password) and the time a password was last changed */
+export const ensureAuthSchema = async () => {
+    try {
+        if (isPg) {
+            const table = await pgPool.query("SELECT to_regclass('public.otp_codes') AS t");
+            if (!table.rows[0]?.t) {
+                await pgPool.query(`
+                    CREATE TABLE IF NOT EXISTS otp_codes (
+                        id TEXT PRIMARY KEY,
+                        phone TEXT NOT NULL,
+                        purpose TEXT NOT NULL,
+                        code_hash TEXT NOT NULL,
+                        attempts INTEGER DEFAULT 0,
+                        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                        used_at TIMESTAMP WITH TIME ZONE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_otp_codes_phone ON otp_codes(phone, purpose, created_at);
+                `);
+            }
+            const col = await pgPool.query(
+                "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'password_changed_at'"
+            );
+            if (!col.rowCount) {
+                await pgPool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP WITH TIME ZONE');
+            }
+        } else {
+            await sqliteRun(`CREATE TABLE IF NOT EXISTS otp_codes (
+                id TEXT PRIMARY KEY, phone TEXT NOT NULL, purpose TEXT NOT NULL, code_hash TEXT NOT NULL,
+                attempts INTEGER DEFAULT 0, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`);
+            try { await sqliteRun('ALTER TABLE users ADD COLUMN password_changed_at TEXT'); } catch (_) { /* already there */ }
+        }
+    } catch (err) {
+        console.warn('⚠️ Auth schema check:', err.message);
+    }
+};
+
 export const initDatabase = async () => {
     if (isDbInitialized) return;
     try {
@@ -194,6 +232,7 @@ export const initDatabase = async () => {
                 if (check.rows[0]?.u && check.rows[0]?.s) {
                     console.log('⚡ Database schema already initialized, skipping heavy DDL migrations.');
                     await ensureInventorySchema();
+                    await ensureAuthSchema();
                     isDbInitialized = true;
                     return;
                 }
@@ -647,6 +686,12 @@ export const initDatabase = async () => {
                 CREATE INDEX IF NOT EXISTS idx_bills_user_id ON bills(user_id);
                 CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number);
                 CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id);
+                CREATE INDEX IF NOT EXISTS idx_saved_bills_user_created ON saved_bills(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_print_bills_user_created ON print_bills(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_saved_bills_user_payment ON saved_bills(user_id, payment_mode);
+                CREATE INDEX IF NOT EXISTS idx_print_bills_user_payment ON print_bills(user_id, payment_mode);
+                CREATE INDEX IF NOT EXISTS idx_saved_bill_items_bill_id ON saved_bill_items(bill_id);
+                CREATE INDEX IF NOT EXISTS idx_print_bill_items_bill_id ON print_bill_items(bill_id);
                 CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_user_barcode ON menu_items(user_id, barcode) WHERE barcode IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_contact_submissions_email ON contact_submissions(email);
@@ -1115,6 +1160,12 @@ export const initDatabase = async () => {
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bills_user_id ON bills(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bills_number ON bills(number)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items(bill_id)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_saved_bills_user_created ON saved_bills(user_id, created_at DESC)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_print_bills_user_created ON print_bills(user_id, created_at DESC)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_saved_bills_user_payment ON saved_bills(user_id, payment_mode)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_print_bills_user_payment ON print_bills(user_id, payment_mode)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_saved_bill_items_bill_id ON saved_bill_items(bill_id)`);
+            await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_print_bill_items_bill_id ON print_bill_items(bill_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id)`);
             await sqliteRun(`CREATE INDEX IF NOT EXISTS idx_menu_items_user_id ON menu_items(user_id)`);
             await sqliteRun(`DROP INDEX IF EXISTS idx_menu_items_barcode`);
@@ -1126,6 +1177,7 @@ export const initDatabase = async () => {
             console.log('✅ SQLite 3 Database initialized successfully!');
         }
         await ensureInventorySchema();
+        await ensureAuthSchema();
         isDbInitialized = true;
     } catch (err) {
         console.error('❌ Failed to initialize database:', err.message);

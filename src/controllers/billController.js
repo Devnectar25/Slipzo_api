@@ -3,7 +3,7 @@ import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
 import RestaurantTable from '../models/RestaurantTable.js';
-import Inventory from '../models/Inventory.js';
+import Inventory, { isInventoryType } from '../models/Inventory.js';
 
 const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
@@ -91,58 +91,24 @@ export const createBill = async (req, res, next) => {
             });
         }
         
-        // Get template: try exact ID match, name/alias match, or default fallback
-        let template = null;
-        const targetTemplateId = template_id || template_name || shop.default_template_id;
-        if (targetTemplateId) {
-            template = await Template.findById(targetTemplateId);
-            if (!template) {
-                template = await Template.findByIdAndUser(targetTemplateId, req.user.id);
+        // Get template: use provided template metadata or default fallback
+        let template = {
+            id: template_id || 'default-1',
+            name: template_name || 'Classic Receipt',
+            width: template_width || '58mm'
+        };
+        // Only lookup custom templates in database if template_name is not provided and id is a custom uuid
+        if (!template_name && template_id && template_id.length > 10) {
+            const dbTemplate = await Template.findById(template_id) || await Template.findByIdAndUser(template_id, req.user.id);
+            if (dbTemplate) {
+                template = dbTemplate;
             }
-        }
-        
-        if (!template) {
-            const userTemplates = await Template.findByUserId(req.user.id);
-            if (Array.isArray(userTemplates) && userTemplates.length > 0) {
-                const targetStr = String(targetTemplateId || '').trim().toLowerCase();
-                
-                const aliasMap = {
-                    'classic': ['classic receipt', 'classic'],
-                    '1': ['classic receipt', 'classic'],
-                    'minimal': ['minimal clean bill', 'minimal'],
-                    '2': ['minimal clean bill', 'minimal'],
-                    'pro': ['shop pro', 'pro'],
-                    '3': ['shop pro', 'pro'],
-                    'eco': ['eco print', 'eco'],
-                    '4': ['eco print', 'eco'],
-                    'modern': ['modern shop', 'modern'],
-                    '5': ['modern shop', 'modern'],
-                    'elite': ['business elite', 'elite'],
-                    '6': ['business elite', 'elite']
-                };
-                const aliases = aliasMap[targetStr] || [];
-
-                template = userTemplates.find((t) => {
-                    const tId = String(t.id || '').toLowerCase();
-                    const tName = String(t.name || '').toLowerCase();
-                    if (tId === targetStr || tName === targetStr) return true;
-                    if (aliases.some(a => tName.includes(a) || tId === a)) return true;
-                    return false;
-                }) || userTemplates.find(t => t.is_default) || userTemplates[0];
-            }
-        }
-
-        if (!template) {
-            // Ultimate fallback to default builtin template definition
-            template = {
-                id: template_id || 'default-1',
-                name: template_name || 'Classic Receipt',
-                width: template_width || '58mm'
-            };
         }
         
         // kirana / cloth shops: no bill for more than is in stock
-        await Inventory.checkBill(req.user.id, normalizedItems);
+        if (isInventoryType(shop?.business_type)) {
+            await Inventory.checkBill(req.user.id, normalizedItems, null, shop);
+        }
 
         // Create bill with transaction
         const bill = await Bill.create({
@@ -166,21 +132,20 @@ export const createBill = async (req, res, next) => {
             shop
         });
 
-        await Inventory.syncBill(req.user.id, bill?.id, normalizedItems, bill?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+        if (isInventoryType(shop?.business_type)) {
+            Inventory.syncBill(req.user.id, bill?.id, normalizedItems, bill?.number, shop).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+        }
 
         const rawTableId = table_number || table || table_name || '';
         if (!is_saved && rawTableId) {
-            try {
-                await RestaurantTable.resetTable(req.user.id, rawTableId);
-            } catch (_) {}
+            RestaurantTable.resetTable(req.user.id, rawTableId).catch(() => {});
         }
 
-        // Fetch updated quota after successful bill insertion
-        const updatedQuota = await Subscription.getQuotaByUserId(req.user.id);
-        
-        // Return bill object augmented with updated quota
+        // Return bill object augmented with quota if print bill
         const responseData = typeof bill.toJSON === 'function' ? bill.toJSON() : { ...bill };
-        responseData.quota = updatedQuota;
+        if (!is_saved) {
+            responseData.quota = await Subscription.getQuotaByUserId(req.user.id).catch(() => null);
+        }
         
         res.status(201).json(responseData);
     } catch (err) {
@@ -288,8 +253,8 @@ export const getTodayAnalytics = async (req, res, next) => {
         const to = new Date(from.getTime() + DAY);
         const yFrom = new Date(from.getTime() - DAY);
         const [today, yesterday] = await Promise.all([
-            Bill.getDayAnalytics(req.user.id, from.toISOString(), to.toISOString()),
-            Bill.getDayAnalytics(req.user.id, yFrom.toISOString(), from.toISOString())
+            Bill.getDayAnalytics(req.user.id, from.toISOString(), to.toISOString(), { includeItems: true }),
+            Bill.getDayAnalytics(req.user.id, yFrom.toISOString(), from.toISOString(), { includeItems: false })
         ]);
         res.json({ ...today, yesterday: { total_sales: yesterday.total_sales, bill_count: yesterday.bill_count, avg_bill: yesterday.avg_bill } });
     } catch (err) {

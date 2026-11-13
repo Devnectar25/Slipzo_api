@@ -25,6 +25,15 @@ class User {
         this.shop = data.shop || null;
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
+        this.password_changed_at = data.password_changed_at || null;
+    }
+
+    /** New password (forgot password). Sessions signed in before this moment stop working. */
+    static async updatePassword(userId, newPassword) {
+        const hashed = await bcrypt.hash(newPassword, 10);
+        const now = new Date().toISOString();
+        await query('UPDATE users SET password = ?, password_changed_at = ?, updated_at = ? WHERE id = ?', [hashed, now, now, userId]);
+        return now;
     }
 
     static async create(userData) {
@@ -145,7 +154,7 @@ class User {
     }
 
     toJSON() {
-        const { password, ...userWithoutPassword } = this;
+        const { password, password_changed_at, ...userWithoutPassword } = this;
         // The internal address of a mobile-number account is not something to show or send to the app
         if (isPhoneEmail(userWithoutPassword.email)) userWithoutPassword.email = '';
         return userWithoutPassword;
