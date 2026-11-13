@@ -48,24 +48,37 @@ export default class Bill {
             billNumber = generateBillNumber(prefix, currentSeq, format);
         }
 
-        // Pre-check uniqueness of billNumber in a single round-trip:
-        const existingNumbers = await query(
-            'SELECT number FROM saved_bills WHERE user_id = ? UNION ALL SELECT number FROM print_bills WHERE user_id = ?',
-            [billData.user_id, billData.user_id]
-        ).catch(() => []);
-        const takenSet = new Set((existingNumbers || []).map(r => r.number));
-
-        let attempts = 0;
-        while (takenSet.has(billNumber) && attempts < 1000) {
-            attempts++;
-            currentSeq++;
+        // Make sure the number is free in both tables. Only the next few candidate numbers are looked up
+        // (indexed on user_id + number), instead of downloading every number the shop has ever used, which
+        // made each new bill slower as the shop's history grew. The unique index plus the retry loop below
+        // still catch a number taken by a bill saved at the same moment.
+        const BATCH = 25;
+        for (let round = 0; round < 40; round++) {
+            const candidates = [billNumber];
+            for (let i = 1; i < BATCH; i++) candidates.push(generateBillNumber(prefix, currentSeq + i, format));
+            const marks = candidates.map(() => '?').join(', ');
+            const rows = await query(
+                `SELECT number FROM saved_bills WHERE user_id = ? AND number IN (${marks})
+                 UNION ALL
+                 SELECT number FROM print_bills WHERE user_id = ? AND number IN (${marks})`,
+                [billData.user_id, ...candidates, billData.user_id, ...candidates]
+            ).catch(() => null);
+            if (!rows) break; // lookup failed: the insert retry below handles a clash
+            const taken = new Set(rows.map((r) => r.number));
+            const free = candidates.findIndex((n) => !taken.has(n));
+            if (free >= 0) {
+                currentSeq += free;
+                billNumber = candidates[free];
+                break;
+            }
+            currentSeq += BATCH;
             billNumber = generateBillNumber(prefix, currentSeq, format);
         }
 
-        let insertedBillId = null;
+        let insertedBill = null;
         let retryCount = 0;
 
-        while (!insertedBillId && retryCount < 25) {
+        while (!insertedBill && retryCount < 25) {
             retryCount++;
             const connection = await beginTransaction();
 
@@ -132,20 +145,17 @@ export default class Bill {
                 );
 
                 // Insert bill items snapshot into target separated items table using ONE batch insert
-                if (billData.items && billData.items.length > 0) {
+                const itemRows = (billData.items || []).map((item) => {
+                    const quantity = Number(item.quantity) || 1;
+                    const rate = Number(item.rate) || 0;
+                    return { id: uuidv4(), bill_id: bill.id, name: item.name, barcode: item.barcode || null, quantity, rate, amount: quantity * rate };
+                });
+                if (itemRows.length > 0) {
                     const itemPlaceholders = [];
                     const itemValues = [];
-                    for (const item of billData.items) {
+                    for (const r of itemRows) {
                         itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
-                        itemValues.push(
-                            uuidv4(),
-                            bill.id,
-                            item.name,
-                            item.barcode || null,
-                            Number(item.quantity) || 1,
-                            Number(item.rate) || 0,
-                            (Number(item.quantity) || 1) * (Number(item.rate) || 0)
-                        );
+                        itemValues.push(r.id, r.bill_id, r.name, r.barcode, r.quantity, r.rate, r.amount);
                     }
                     await connection.query(
                         `INSERT INTO ${mainItemsTable} (id, bill_id, name, barcode, quantity, rate, amount) VALUES ${itemPlaceholders.join(', ')}`,
@@ -163,7 +173,14 @@ export default class Bill {
                 await connection.commit();
                 connection.release();
 
-                insertedBillId = bill.id;
+                // Everything in the bill is already known here, so it is returned directly instead of being
+                // read back from the database (that was up to 3 more round-trips on every bill)
+                insertedBill = new Bill({
+                    ...bill,
+                    items: itemRows,
+                    is_saved: isSaved ? 1 : 0,
+                    created_at: new Date().toISOString()
+                });
             } catch (err) {
                 await connection.rollback();
                 connection.release();
@@ -184,8 +201,7 @@ export default class Bill {
             }
         }
 
-        // Fetch complete bill with items
-        return await Bill.findById(insertedBillId);
+        return insertedBill;
     }
 
     static async findById(id) {

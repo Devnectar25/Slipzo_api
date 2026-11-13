@@ -31,13 +31,24 @@ export const inviteStaff = async (req, res, next) => {
             if (!phone) {
                 return res.status(400).json({ detail: 'Please enter a valid 10-digit mobile number.' });
             }
-            email = phoneToEmail(phone);
             what = 'mobile number';
+            // Look the number up on the account itself and, for workers who signed up with email or Google,
+            // in their shop profile. Only checking the internal "<number>@phone..." address missed every worker
+            // whose account was not created with this mobile number.
+            const account = await User.findAccountForPhone(phone);
+            if (!account) {
+                return res.status(404).json({ detail: `No Slipzo account found with this ${what}. Ask your worker to sign up first, then add them again.` });
+            }
+            if (account.id === req.user.id || account.id === req.authUser?.id) {
+                return res.status(400).json({ detail: `That is your own ${what}. Add your worker's ${what} instead.` });
+            }
+            // The invite is matched to the worker's login email when they join, so store the account's own email
+            email = String(account.email || phoneToEmail(phone)).trim().toLowerCase();
         }
         if (email === String(req.user.email || '').toLowerCase()) {
             return res.status(400).json({ detail: `That is your own ${what}. Add your worker's ${what} instead.` });
         }
-        if (!(await User.existsByEmail(email))) {
+        if (what === 'email' && !(await User.existsByEmail(email))) {
             return res.status(404).json({ detail: `No Slipzo account found with this ${what}. Ask your worker to sign up first, then add them again.` });
         }
         if (await ShopStaff.findByOwnerAndEmail(req.user.id, email)) {

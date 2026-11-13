@@ -97,6 +97,36 @@ class User {
         return Boolean(row);
     }
 
+    /**
+     * The account behind a mobile number, for adding a worker. Finds:
+     *  1. accounts made with the mobile number (phone column / internal address), however the number was saved
+     *     ("+91 98765 43210", "09876543210", ...);
+     *  2. otherwise an email or Google account whose shop profile has this number, as long as only one account
+     *     has it (a shared shop number must not pick a random person).
+     * Returns { id, email } or null.
+     */
+    static async findAccountForPhone(phone) {
+        const digits = (col) => `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(${col}, ''), ' ', ''), '-', ''), '+', ''), '(', ''), ')', '')`;
+        const variants = [phone, `91${phone}`, `0${phone}`];
+
+        const own = await queryOne(
+            `SELECT id, email FROM users
+             WHERE LOWER(email) = ? OR phone = ? OR ${digits('phone')} IN (?, ?, ?)
+             ORDER BY CASE WHEN LOWER(email) = ? THEN 0 ELSE 1 END
+             LIMIT 1`,
+            [phoneToEmail(phone), phone, ...variants, phoneToEmail(phone)]
+        );
+        if (own) return own;
+
+        const viaShop = await query(
+            `SELECT u.id, u.email FROM shops s JOIN users u ON u.id = s.user_id
+             WHERE ${digits('s.phone')} IN (?, ?, ?)
+             LIMIT 2`,
+            variants
+        );
+        return viaShop && viaShop.length === 1 ? viaShop[0] : null;
+    }
+
     static async findByPhone(phone) {
         try {
             const data = await queryOne('SELECT * FROM users WHERE phone = ? OR email = ?', [phone, phoneToEmail(phone)]);
