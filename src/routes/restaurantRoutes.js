@@ -1,6 +1,6 @@
 import express from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { getTables, updateTable, resetTable, resetAllTables, setupTables } from '../controllers/restaurantTableController.js';
+import { getTables, updateTable, resetTable, resetAllTables, releaseOldTables, setupTables } from '../controllers/restaurantTableController.js';
 
 const router = express.Router();
 
@@ -15,6 +15,10 @@ router.put('/tables/:id', updateTable);
 
 router.post('/reset-all', resetAllTables);
 router.post('/tables/reset-all', resetAllTables);
+
+// a new day: tables still holding yesterday's orders become available
+router.post('/release-old', releaseOldTables);
+router.post('/tables/release-old', releaseOldTables);
 
 router.post('/reset/:id', resetTable);
 router.post('/tables/reset/:id', resetTable);

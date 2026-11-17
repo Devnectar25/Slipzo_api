@@ -154,6 +154,31 @@ export default class RestaurantTable {
         return await this.getTablesByUserId(userId);
     }
 
+    /**
+     * A new day: every table whose order was last changed before `cutoffIso` (the shop's local midnight) is made
+     * available again, so yesterday's unfinished orders do not keep tables occupied. The bills themselves are kept.
+     * Dates are compared here rather than in SQL because updated_at is stored differently by SQLite and Postgres.
+     * Returns how many tables were released.
+     */
+    static async releaseTablesOpenedBefore(userId, cutoffIso) {
+        if (!userId || !cutoffIso) return 0;
+        const cutoff = new Date(cutoffIso).getTime();
+        if (Number.isNaN(cutoff)) return 0;
+        const rows = await query('SELECT * FROM restaurant_tables WHERE user_id = ?', [userId]);
+        const stale = (rows || []).filter((r) => {
+            const t = new RestaurantTable(r);
+            const occupied = String(t.status).toUpperCase() === 'OCCUPIED' || t.current_items.length > 0 || t.total_amount > 0;
+            if (!occupied) return false;
+            const changed = r.updated_at ? new Date(r.updated_at).getTime() : NaN;
+            return Number.isNaN(changed) || changed < cutoff;
+        });
+        const now = new Date().toISOString();
+        for (const r of stale) {
+            await update('restaurant_tables', { status: 'AVAILABLE', current_items: '[]', total_amount: 0.00, updated_at: now }, 'id = ?', [r.id]);
+        }
+        return stale.length;
+    }
+
     static async setupTables(userId, targetCount) {
         const count = Math.max(1, Math.min(Number(targetCount) || 10, 200));
 

@@ -245,7 +245,7 @@ export default class Bill {
     }
 
     static async findByUserId(userId, options = {}) {
-        const { page, limit, search, payment_mode, daysLimit, is_saved } = options;
+        const { page, limit, search, payment_mode, daysLimit, fromDate, is_saved } = options;
 
         let baseSql = '';
         let params = [];
@@ -269,7 +269,10 @@ export default class Bill {
             itemsFetchMode = 'both';
         }
 
-        if (daysLimit) {
+        if (fromDate) {
+            baseSql += ` AND created_at >= ?`;
+            params.push(fromDate);
+        } else if (daysLimit) {
             const daysNum = Number(daysLimit) || 10;
             const cutoffDate = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
             baseSql += ` AND created_at >= ?`;
