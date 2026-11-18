@@ -63,6 +63,27 @@ export const resetAllTables = async (req, res, next) => {
     }
 };
 
+/**
+ * POST /restaurant/tables/release-old  { from: <ISO of the shop's local midnight> }
+ * Frees every table still holding an order from before today. Only a midnight within the last day is accepted
+ * (same rule as the analytics), so a wrong phone clock cannot clear tables that are in use.
+ */
+export const releaseOldTables = async (req, res, next) => {
+    try {
+        const from = new Date(String(req.body?.from || ''));
+        const now = Date.now();
+        if (Number.isNaN(from.getTime()) || from.getTime() > now || now - from.getTime() > 25 * 60 * 60 * 1000) {
+            return res.status(400).json({ detail: 'from must be the start of today' });
+        }
+        const released = await RestaurantTable.releaseTablesOpenedBefore(req.user.id, from.toISOString());
+        const shop = await Shop.findByUserId(req.user.id);
+        const tables = await RestaurantTable.getTablesByUserId(req.user.id, shop?.table_count || 10);
+        res.json({ released, tables });
+    } catch (err) {
+        next(err);
+    }
+};
+
 export const setupTables = async (req, res, next) => {
     try {
         const { table_count } = req.body;

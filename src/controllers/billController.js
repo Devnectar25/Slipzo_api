@@ -9,7 +9,7 @@ const badRequest = (message) => Object.assign(new Error(message), { statusCode: 
 
 export const getBills = async (req, res, next) => {
     try {
-        const { page, limit, search, payment_mode, days_limit, is_saved, saved_only } = req.query;
+        const { page, limit, search, payment_mode, days_limit, from, is_saved, saved_only } = req.query;
         const options = {};
         if (page !== undefined && limit !== undefined) {
             options.page = page;
@@ -18,6 +18,15 @@ export const getBills = async (req, res, next) => {
         if (search) options.search = search;
         if (payment_mode) options.payment_mode = payment_mode;
         if (days_limit) options.daysLimit = days_limit;
+        // from=<ISO of the shop's local midnight>: only bills made since then (the History page shows today only).
+        // Same rule as the analytics: a midnight within the last day is accepted, anything else is ignored.
+        if (from) {
+            const fromDate = new Date(String(from));
+            const now = Date.now();
+            if (!Number.isNaN(fromDate.getTime()) && fromDate.getTime() <= now && now - fromDate.getTime() <= 25 * 60 * 60 * 1000) {
+                options.fromDate = fromDate.toISOString();
+            }
+        }
         if (is_saved !== undefined) options.is_saved = is_saved === 'true' || is_saved === '1' || is_saved === true;
         if (saved_only !== undefined) options.is_saved = saved_only === 'true' || saved_only === '1' || saved_only === true;
 
