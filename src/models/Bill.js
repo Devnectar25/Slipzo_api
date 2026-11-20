@@ -537,6 +537,10 @@ export default class Bill {
         }
 
         if (!bill) {
+            const printedBill = await queryOne('SELECT * FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
+            if (printedBill) {
+                return printedBill;
+            }
             throw Object.assign(new Error('Saved bill not found or cannot be edited. Only saved bills can be edited.'), { statusCode: 404 });
         }
 
