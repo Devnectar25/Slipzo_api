@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert } from '../config/database.js';
 import Shop from './Shop.js';
 import UserMenuItem from './UserMenuItem.js';
+import { qtyText } from '../utils/units.js';
 
 // Stock is kept for these shop types only (they sell counted goods; cafes and restaurants do not)
 const INVENTORY_TYPES = ['kirana_grocery', 'clothing_garments'];
@@ -13,6 +14,8 @@ export const isInventoryType = (type) => {
 const REASONS = ['opening', 'restock', 'sale', 'sale_return', 'damage', 'correction', 'adjust'];
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
+// stock counts keep 3 decimals (0.25 kg, 0.125 L)
+const round3 = (n) => Math.round(Number(n) * 1000) / 1000;
 const fail = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 
 async function currentStock(userId, itemId) {
@@ -87,10 +90,10 @@ export default class Inventory {
         for (const [itemId, { item, qty }] of totals) {
             const available = Number(item.stock_qty || 0) + (alreadyTaken.get(itemId) || 0);
             if (qty > available) {
-                const left = Math.max(0, round2(available));
+                const left = Math.max(0, round3(available));
                 throw fail(left <= 0
                     ? `"${item.name}" is out of stock`
-                    : `Only ${left} of "${item.name}" left in stock`);
+                    : `Only ${qtyText(left, item.unit)} of "${item.name}" left in stock`);
             }
         }
     }
@@ -104,10 +107,11 @@ export default class Inventory {
         if (set !== undefined && set !== null && set !== '') {
             const target = num(set);
             if (!Number.isFinite(target) || target < 0) throw fail('Stock must be 0 or more');
-            delta = round2(target - (item.track_stock ? Number(item.stock_qty || 0) : 0));
+            delta = round3(target - (item.track_stock ? Number(item.stock_qty || 0) : 0));
             if (!item.track_stock) reason = reason || 'opening';
         } else {
             delta = num(change);
+            if (Number.isFinite(delta)) delta = round3(delta);
             if (!Number.isFinite(delta) || delta === 0) throw fail('Enter how many to add or remove');
         }
         if (Math.abs(delta) > 1000000) throw fail('That is too large a change');
@@ -116,7 +120,7 @@ export default class Inventory {
         const balance = delta === 0 && item.track_stock
             ? Number(item.stock_qty || 0)
             : await applyChange(userId, itemId, delta, why, { note });
-        return { id: itemId, stock_qty: balance, track_stock: true, low_stock_alert: item.low_stock_alert, change: delta, reason: why };
+        return { id: itemId, stock_qty: balance, track_stock: true, low_stock_alert: item.low_stock_alert, unit: item.unit, change: delta, reason: why };
     }
 
     /** The item's stock and its latest movements (newest first) */
@@ -128,7 +132,7 @@ export default class Inventory {
             [userId, itemId, Math.max(1, Math.min(200, limit))]
         ).catch(() => []);
         return {
-            item: { id: item.id, name: item.name, stock_qty: item.stock_qty, low_stock_alert: item.low_stock_alert, track_stock: item.track_stock, price: item.price },
+            item: { id: item.id, name: item.name, stock_qty: item.stock_qty, low_stock_alert: item.low_stock_alert, track_stock: item.track_stock, price: item.price, unit: item.unit },
             movements: (rows || []).map((r) => ({ ...r, change: Number(r.change), balance_after: num(r.balance_after) }))
         };
     }
@@ -164,7 +168,7 @@ export default class Inventory {
         const totals = await trackedTotals(userId, items);
         for (const [itemId, { qty }] of totals) {
             if (qty > 0) {
-                await applyChange(userId, itemId, -round2(qty), 'sale', { billId, note: billNumber ? `Bill #${billNumber}` : 'Bill' });
+                await applyChange(userId, itemId, -round3(qty), 'sale', { billId, note: billNumber ? `Bill #${billNumber}` : 'Bill' });
             }
         }
     }

@@ -1,4 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
+import { normalizeUnit, roundQty } from '../utils/units.js';
+import { normalizeGstRate } from '../utils/gst.js';
 import { query, queryOne, insert, beginTransaction } from '../config/database.js';
 import { generateBillNumber, calculateBillTotals } from '../utils/helpers.js';
 import RestaurantTable from './RestaurantTable.js';
@@ -12,7 +14,15 @@ export default class Bill {
         this.customer_name = data.customer_name || '';
         this.customer_phone = data.customer_phone || '';
         this.number = data.number || generateBillNumber();
-        this.items = data.items || [];
+        // Postgres returns NUMERIC columns as text ("2.500"): hand quantities and money back as numbers
+        this.items = (data.items || []).map((it) => ({
+            ...it,
+            quantity: it.quantity === undefined || it.quantity === null ? it.quantity : roundQty(it.quantity),
+            ...(it.rate !== undefined && it.rate !== null ? { rate: Number(it.rate) } : {}),
+            ...(it.amount !== undefined && it.amount !== null ? { amount: Number(it.amount) } : {}),
+            unit: normalizeUnit(it.unit),
+            gst_rate: normalizeGstRate(it.gst_rate)
+        }));
         this.discount = Number(data.discount || 0);
         this.tax_rate = Number(data.tax_rate || 0);
         this.payment_mode = data.payment_mode || 'Cash';
@@ -146,19 +156,19 @@ export default class Bill {
 
                 // Insert bill items snapshot into target separated items table using ONE batch insert
                 const itemRows = (billData.items || []).map((item) => {
-                    const quantity = Number(item.quantity) || 1;
+                    const quantity = roundQty(Number(item.quantity) || 1);
                     const rate = Number(item.rate) || 0;
-                    return { id: uuidv4(), bill_id: bill.id, name: item.name, barcode: item.barcode || null, quantity, rate, amount: quantity * rate };
+                    return { id: uuidv4(), bill_id: bill.id, name: item.name, barcode: item.barcode || null, quantity, rate, amount: Math.round(quantity * rate * 100) / 100, unit: normalizeUnit(item.unit), gst_rate: normalizeGstRate(item.gst_rate) };
                 });
                 if (itemRows.length > 0) {
                     const itemPlaceholders = [];
                     const itemValues = [];
                     for (const r of itemRows) {
-                        itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
-                        itemValues.push(r.id, r.bill_id, r.name, r.barcode, r.quantity, r.rate, r.amount);
+                        itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                        itemValues.push(r.id, r.bill_id, r.name, r.barcode, r.quantity, r.rate, r.amount, r.unit, r.gst_rate);
                     }
                     await connection.query(
-                        `INSERT INTO ${mainItemsTable} (id, bill_id, name, barcode, quantity, rate, amount) VALUES ${itemPlaceholders.join(', ')}`,
+                        `INSERT INTO ${mainItemsTable} (id, bill_id, name, barcode, quantity, rate, amount, unit, gst_rate) VALUES ${itemPlaceholders.join(', ')}`,
                         itemValues
                     );
                 }
@@ -357,32 +367,46 @@ export default class Bill {
      * (the app groups those by its own local hour). fromIso/toIso: the shop's local day in UTC.
      */
     static async getDayAnalytics(userId, fromIso, toIso, { includeItems = true } = {}) {
-        const bills = await query(
-            `SELECT id, total, discount, payment_mode, created_at, 'saved' AS kind FROM saved_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?
-             UNION ALL
-             SELECT id, total, discount, payment_mode, created_at, 'printed' AS kind FROM print_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?`,
-            [userId, fromIso, toIso, userId, fromIso, toIso]
-        ).catch(() => []);
-
-        let items = [];
-        if (includeItems) {
-            items = await query(
-                `SELECT LOWER(TRIM(i.name)) AS k, MIN(i.name) AS name, SUM(i.quantity) AS qty, SUM(i.amount) AS amount
-                 FROM (
-                    SELECT si.name, si.quantity, si.amount FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
+        const range = [userId, fromIso, toIso, userId, fromIso, toIso];
+        // the day's bills, items sold and GST lines are read at the same time (one wait instead of three)
+        const [bills, items, gstLines] = await Promise.all([
+            query(
+                `SELECT id, total, discount, payment_mode, created_at, 'saved' AS kind FROM saved_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?
+                 UNION ALL
+                 SELECT id, total, discount, payment_mode, created_at, 'printed' AS kind FROM print_bills WHERE user_id = ? AND created_at >= ? AND created_at < ?`,
+                range
+            ).catch(() => []),
+            includeItems
+                ? query(
+                    `SELECT LOWER(TRIM(i.name)) AS k, MIN(i.name) AS name, SUM(i.quantity) AS qty, SUM(i.amount) AS amount
+                     FROM (
+                        SELECT si.name, si.quantity, si.amount FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
+                            WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+                        UNION ALL
+                        SELECT pi.name, pi.quantity, pi.amount FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
+                            WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
+                     ) i
+                     GROUP BY LOWER(TRIM(i.name))
+                     ORDER BY SUM(i.amount) DESC`,
+                    range
+                ).catch(() => [])
+                : Promise.resolve([]),
+            // GST collected in the day's bills (line rates include GST; a bill discount is spread over its lines)
+            includeItems
+                ? query(
+                    `SELECT si.bill_id, si.amount, si.gst_rate FROM saved_bill_items si JOIN saved_bills b ON b.id = si.bill_id
                         WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
-                    UNION ALL
-                    SELECT pi.name, pi.quantity, pi.amount FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
-                        WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?
-                 ) i
-                 GROUP BY LOWER(TRIM(i.name))
-                 ORDER BY SUM(i.amount) DESC`,
-                [userId, fromIso, toIso, userId, fromIso, toIso]
-            ).catch(() => []);
-        }
+                     UNION ALL
+                     SELECT pi.bill_id, pi.amount, pi.gst_rate FROM print_bill_items pi JOIN print_bills b ON b.id = pi.bill_id
+                        WHERE b.user_id = ? AND b.created_at >= ? AND b.created_at < ?`,
+                    range
+                ).catch(() => [])
+                : Promise.resolve([])
+        ]);
 
         const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
         const list = bills || [];
+        const gst = Bill.summarizeGst(list, gstLines || []);
         const total = list.reduce((s, b) => s + Number(b.total || 0), 0);
         const of = (kind) => list.filter((b) => b.kind === kind);
         const modes = new Map();
@@ -406,7 +430,45 @@ export default class Bill {
             items_sold: r2(itemRows.reduce((s, it) => s + it.qty, 0)),
             payment_modes: [...modes.values()].map((m) => ({ ...m, total: r2(m.total) })).sort((a, b) => b.total - a.total),
             top_items: itemRows.slice(0, 5),
+            gst,
             bills: list.map((b) => ({ total: r2(b.total), created_at: b.created_at }))
+        };
+    }
+
+    /**
+     * GST in a set of bills: { total, cgst, sgst, taxable, by_rate: [{ rate, taxable, gst }] }.
+     * Each line's amount includes GST at its rate; the bill total (after discount) is spread over its lines.
+     */
+    static summarizeGst(bills, lines) {
+        const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+        const billTotal = new Map((bills || []).map((b) => [b.id, Number(b.total || 0)]));
+        const lineSum = new Map();
+        for (const l of lines) lineSum.set(l.bill_id, (lineSum.get(l.bill_id) || 0) + Number(l.amount || 0));
+        const byRate = new Map();
+        let taxable = 0;
+        let tax = 0;
+        for (const l of lines) {
+            const rate = normalizeGstRate(l.gst_rate);
+            if (rate <= 0 || !billTotal.has(l.bill_id)) continue;
+            const sum = lineSum.get(l.bill_id) || 0;
+            const factor = sum > 0 ? Math.min(1, billTotal.get(l.bill_id) / sum) : 1;
+            const gross = Number(l.amount || 0) * factor;
+            const base = gross / (1 + rate / 100);
+            const g = byRate.get(rate) || { rate, taxable: 0, gst: 0 };
+            g.taxable += base;
+            g.gst += gross - base;
+            byRate.set(rate, g);
+            taxable += base;
+            tax += gross - base;
+        }
+        const total = r2(tax);
+        const cgst = r2(total / 2);
+        return {
+            total,
+            cgst,
+            sgst: r2(total - cgst),
+            taxable: r2(taxable),
+            by_rate: [...byRate.values()].sort((a, b) => a.rate - b.rate).map((g) => ({ rate: g.rate, taxable: r2(g.taxable), gst: r2(g.gst) }))
         };
     }
 
@@ -528,19 +590,27 @@ export default class Bill {
     }
 
     static async update(id, userId, billData) {
+        let targetTable = 'saved_bills';
+        let targetItemsTable = 'saved_bill_items';
         let bill = await queryOne('SELECT * FROM saved_bills WHERE id = ? AND user_id = ?', [id, userId]);
-        let isSavedBills = true;
 
         if (!bill) {
-            bill = await queryOne('SELECT * FROM bills WHERE id = ? AND user_id = ? AND is_saved = 1', [id, userId]);
-            isSavedBills = false;
+            bill = await queryOne('SELECT * FROM print_bills WHERE id = ? AND user_id = ?', [id, userId]);
+            if (bill) {
+                targetTable = 'print_bills';
+                targetItemsTable = 'print_bill_items';
+            }
         }
 
         if (!bill) {
-            const printedBill = await queryOne('SELECT * FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
-            if (printedBill) {
-                return printedBill;
+            bill = await queryOne('SELECT * FROM bills WHERE id = ? AND user_id = ?', [id, userId]);
+            if (bill) {
+                targetTable = 'bills';
+                targetItemsTable = 'bill_items';
             }
+        }
+
+        if (!bill) {
             throw Object.assign(new Error('Saved bill not found or cannot be edited. Only saved bills can be edited.'), { statusCode: 404 });
         }
 
@@ -552,7 +622,7 @@ export default class Bill {
             const cleanTableNum = rawTableNum ? String(rawTableNum).trim() : null;
 
             await connection.query(
-                `UPDATE saved_bills SET 
+                `UPDATE ${targetTable} SET 
                     customer_name = ?, 
                     customer_phone = ?, 
                     table_number = ?, 
@@ -582,66 +652,72 @@ export default class Bill {
                     id,
                     userId
                 ]
-            ).catch(() => {});
+            );
 
-            // Delete old saved items
-            await connection.query('DELETE FROM saved_bill_items WHERE bill_id = ?', [id]).catch(() => {});
+            // Delete old items
+            await connection.query(`DELETE FROM ${targetItemsTable} WHERE bill_id = ?`, [id]).catch(() => {});
 
-            // Insert updated saved items in a single batch query
+            // Insert updated items in a single batch query
             if (billData.items && billData.items.length > 0) {
                 const itemPlaceholders = [];
                 const itemValues = [];
                 for (const item of billData.items) {
-                    itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
+                    const quantity = roundQty(Number(item.quantity) || 1);
+                    const rate = Number(item.rate) || 0;
+                    itemPlaceholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)');
                     itemValues.push(
                         uuidv4(),
                         id,
                         item.name,
                         item.barcode || null,
-                        Number(item.quantity) || 1,
-                        Number(item.rate) || 0,
-                        (Number(item.quantity) || 1) * (Number(item.rate) || 0)
+                        quantity,
+                        rate,
+                        Math.round(quantity * rate * 100) / 100,
+                        normalizeUnit(item.unit),
+                        normalizeGstRate(item.gst_rate)
                     );
                 }
                 await connection.query(
-                    `INSERT INTO saved_bill_items (id, bill_id, name, barcode, quantity, rate, amount) VALUES ${itemPlaceholders.join(', ')}`,
+                    `INSERT INTO ${targetItemsTable} (id, bill_id, name, barcode, quantity, rate, amount, unit, gst_rate) VALUES ${itemPlaceholders.join(', ')}`,
                     itemValues
                 ).catch(() => {});
             }
 
-            // Also keep bills / bill_items in sync if present
-            await connection.query(
-                `UPDATE bills SET 
-                    customer_name = ?, 
-                    customer_phone = ?, 
-                    table_number = ?, 
-                    discount = ?, 
-                    tax_rate = ?, 
-                    payment_mode = ?, 
-                    template_id = ?, 
-                    template_name = ?, 
-                    template_width = ?, 
-                    subtotal = ?, 
-                    tax_amount = ?, 
-                    total = ?
-                WHERE id = ? AND user_id = ?`,
-                [
-                    billData.customer_name || '',
-                    billData.customer_phone || '',
-                    cleanTableNum,
-                    Number(billData.discount) || 0,
-                    Number(billData.tax_rate) || 0,
-                    billData.payment_mode || 'Cash',
-                    billData.template_id || bill.template_id || 'default-1',
-                    billData.template_name || bill.template_name || '',
-                    billData.template_width || bill.template_width || '58mm',
-                    totals.subtotal,
-                    totals.tax_amount,
-                    totals.total,
-                    id,
-                    userId
-                ]
-            ).catch(() => {});
+            // Also keep legacy bills / bill_items in sync if present
+            if (targetTable !== 'bills') {
+                await connection.query(
+                    `UPDATE bills SET 
+                        customer_name = ?, 
+                        customer_phone = ?, 
+                        table_number = ?, 
+                        discount = ?, 
+                        tax_rate = ?, 
+                        payment_mode = ?, 
+                        template_id = ?, 
+                        template_name = ?, 
+                        template_width = ?, 
+                        subtotal = ?, 
+                        tax_amount = ?, 
+                        total = ?
+                    WHERE id = ? AND user_id = ?`,
+                    [
+                        billData.customer_name || '',
+                        billData.customer_phone || '',
+                        cleanTableNum,
+                        Number(billData.discount) || 0,
+                        Number(billData.tax_rate) || 0,
+                        billData.payment_mode || 'Cash',
+                        billData.template_id || bill.template_id || 'default-1',
+                        billData.template_name || bill.template_name || '',
+                        billData.template_width || bill.template_width || '58mm',
+                        totals.subtotal,
+                        totals.tax_amount,
+                        totals.total,
+                        id,
+                        userId
+                    ]
+                ).catch(() => {});
+            }
 
             await connection.commit();
             connection.release();

@@ -2,7 +2,20 @@ import { query } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
 
 class Subscription {
-  static async create({ user_id, user_name, user_email, plan_name, amount, prints_count, payment_id, payment_status = 'completed' }) {
+  static async create({
+    user_id,
+    user_name,
+    user_email,
+    plan_name,
+    amount,
+    prints_count,
+    payment_id,
+    payment_status = 'completed',
+    plan_id = null,
+    plan_type = 'print',
+    duration_months = 0,
+    expires_at = null
+  }) {
     const id = `sub_${uuidv4().replace(/-/g, '').substring(0, 16)}`;
     
     // Resolve user_id against existing users table if possible
@@ -16,10 +29,37 @@ class Subscription {
       if (checkEmail && checkEmail.length > 0) validUserId = checkEmail[0].id;
     }
 
+    // Auto-compute expires_at for time plans (extends existing validity if still active)
+    let calculatedExpiresAt = expires_at;
+    if (!calculatedExpiresAt && (plan_type === 'time' || duration_months > 0 || /month|year/i.test(plan_name || ''))) {
+      let months = Number(duration_months || 0);
+      if (!months) {
+        if (/1\s*year/i.test(plan_name)) months = 12;
+        else if (/3\s*month/i.test(plan_name)) months = 3;
+        else months = 1;
+      }
+      const now = new Date();
+      let baseDate = now;
+      if (validUserId) {
+        const existing = await query(
+          `SELECT expires_at FROM subscriptions WHERE user_id = ? AND expires_at > CURRENT_TIMESTAMP ORDER BY expires_at DESC LIMIT 1`,
+          [validUserId]
+        ).catch(() => []);
+        if (existing && existing[0]?.expires_at) {
+          const prevExp = new Date(existing[0].expires_at);
+          if (prevExp > now) baseDate = prevExp;
+        }
+      }
+      const exp = new Date(baseDate.getTime());
+      exp.setDate(exp.getDate() + months * 30);
+      calculatedExpiresAt = exp.toISOString();
+    }
+
     const sql = `
       INSERT INTO subscriptions (
-        id, user_id, user_name, user_email, plan_name, amount, prints_count, payment_id, payment_status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        id, user_id, user_name, user_email, plan_name, amount, prints_count,
+        payment_id, payment_status, plan_id, plan_type, duration_months, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
     const params = [
       id,
@@ -30,7 +70,11 @@ class Subscription {
       parseFloat(amount || 0),
       parseInt(prints_count || 0),
       payment_id || `PAY_${Date.now()}`,
-      payment_status || 'completed'
+      payment_status || 'completed',
+      plan_id || null,
+      plan_type || 'print',
+      parseInt(duration_months || 0),
+      calculatedExpiresAt || null
     ];
     await query(sql, params);
     return this.findById(id);
@@ -71,7 +115,13 @@ class Subscription {
         availablePrints: 10,
         isFreeTier: true,
         activePlanName: 'Free Starter Tier',
-        onboardingRewardClaimed: true
+        onboardingRewardClaimed: true,
+        planType: 'print',
+        expiresAt: null,
+        daysRemaining: null,
+        isExpiringSoon: false,
+        isExpired: false,
+        hasActiveTimePlan: false
       };
     }
 
@@ -81,7 +131,6 @@ class Subscription {
         `SELECT onboarding_reward_claimed, prints_used FROM users WHERE id = ?`,
         [userId]
       ).catch(() => []);
-      // users.onboarding_reward_claimed: 0 = setup not finished, 1 = finished AND got the old 10 free prints (accounts made before free prints were removed keep them), 2 = finished, no free prints
       const onboardingValue = Number(userRows[0]?.onboarding_reward_claimed || 0);
       const onboardingDone = onboardingValue >= 1;
       const rewardClaimed = onboardingValue === 1;
@@ -98,22 +147,79 @@ class Subscription {
       const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
       const latestPlan = subRows[0]?.latest_plan || null;
 
-      // 3. Only accounts that already received the old reward keep their 10 free prints; nobody new gets any
-      const baseFreePrints = rewardClaimed ? 10 : 0;
-      const totalPrints = baseFreePrints + purchasedPrints;
+      // 3. Check for Time-based subscriptions and calculate expiry
+      const timeSubs = await query(
+        `SELECT * FROM subscriptions 
+         WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)
+         AND (plan_type = 'time' OR plan_name LIKE '%Month%' OR plan_name LIKE '%Year%')
+         ORDER BY created_at DESC LIMIT 5`,
+        [userId]
+      ).catch(() => []);
 
-      // 4. Calculate prints remaining based on actual prints used
-      const printsRemaining = Math.max(0, totalPrints - usedPrints);
+      let hasActiveTimePlan = false;
+      let expiresAt = null;
+      let daysRemaining = null;
+      let isExpiringSoon = false;
+      let isExpired = false;
+      let activeTimePlanName = null;
+
+      if (timeSubs && timeSubs.length > 0) {
+        for (const sub of timeSubs) {
+          let subExp = sub.expires_at ? new Date(sub.expires_at) : null;
+          if (!subExp && sub.created_at) {
+            const createdAt = new Date(sub.created_at);
+            let months = Number(sub.duration_months || 0);
+            if (!months) {
+              if (/1\s*year/i.test(sub.plan_name)) months = 12;
+              else if (/3\s*month/i.test(sub.plan_name)) months = 3;
+              else if (/1\s*month/i.test(sub.plan_name)) months = 1;
+            }
+            if (months > 0) {
+              subExp = new Date(createdAt.getTime());
+              subExp.setDate(subExp.getDate() + months * 30);
+            }
+          }
+
+          if (subExp) {
+            const now = new Date();
+            const diffMs = subExp.getTime() - now.getTime();
+            // Calculate exact days left
+            const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+            if (!expiresAt || subExp > new Date(expiresAt)) {
+              expiresAt = subExp.toISOString();
+              daysRemaining = diffDays;
+              activeTimePlanName = sub.plan_name;
+              hasActiveTimePlan = diffDays >= 0;
+              isExpired = diffDays < 0;
+              isExpiringSoon = diffDays >= 0 && diffDays <= 3;
+            }
+          }
+        }
+      }
+
+      // 4. Print quota calculation
+      const baseFreePrints = rewardClaimed ? 10 : 0;
+      const totalPrints = hasActiveTimePlan ? Math.max(99999, baseFreePrints + purchasedPrints) : (baseFreePrints + purchasedPrints);
+      const printsRemaining = hasActiveTimePlan ? 99999 : Math.max(0, totalPrints - usedPrints);
 
       return {
         totalPrints,
         usedPrints,
         printsRemaining,
         availablePrints: printsRemaining,
-        isFreeTier: purchasedPrints === 0,
-        activePlanName: latestPlan || (purchasedPrints > 0 ? 'Active Plan' : (rewardClaimed ? 'Free Starter Tier' : (onboardingDone ? 'No Plan' : 'New Account (Pending Setup)'))),
-        // true once setup is finished (the name is kept so older app versions keep working)
-        onboardingRewardClaimed: onboardingDone
+        isFreeTier: !hasActiveTimePlan && purchasedPrints === 0,
+        activePlanName: hasActiveTimePlan
+          ? activeTimePlanName
+          : (latestPlan || (purchasedPrints > 0 ? 'Active Plan' : (rewardClaimed ? 'Free Starter Tier' : (onboardingDone ? 'No Plan' : 'New Account (Pending Setup)')))),
+        onboardingRewardClaimed: onboardingDone,
+        // Time plan Jio/Airtel style expiry fields:
+        planType: (hasActiveTimePlan || timeSubs.length > 0) ? 'time' : 'print',
+        expiresAt,
+        daysRemaining,
+        isExpiringSoon,
+        isExpired,
+        hasActiveTimePlan
       };
     } catch (err) {
       console.error('Error computing quota for user:', userId, err);
@@ -124,7 +230,13 @@ class Subscription {
         availablePrints: 10,
         isFreeTier: true,
         activePlanName: 'Free Starter Tier',
-        onboardingRewardClaimed: false
+        onboardingRewardClaimed: false,
+        planType: 'print',
+        expiresAt: null,
+        daysRemaining: null,
+        isExpiringSoon: false,
+        isExpired: false,
+        hasActiveTimePlan: false
       };
     }
   }

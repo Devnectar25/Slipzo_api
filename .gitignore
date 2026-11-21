@@ -143,3 +143,7 @@ ehthumbs.db
 *.orig
 
 
+
+# Firebase service account for push notifications (never commit; use FIREBASE_SERVICE_ACCOUNT in .env)
+*firebase-adminsdk*.json
+*service-account*.json

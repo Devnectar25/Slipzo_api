@@ -6,6 +6,7 @@ import Template from '../models/Template.js';
 import { generateToken } from '../utils/helpers.js';
 import { normalizePhone, isPhoneEmail } from '../utils/phone.js';
 import Otp from '../models/Otp.js';
+import { paymentFieldsFromBody } from '../utils/paymentModes.js';
 
 export const checkAvailability = async (req, res, next) => {
     try {
@@ -101,6 +102,9 @@ export const register = async (req, res, next) => {
         if (shopName && (shopName.length < 2 || shopName.length > 100)) {
             return res.status(400).json({ detail: 'Shop name must be between 2 and 100 characters' });
         }
+        // How the shop takes payments, and its UPI ID for the payment QR code (checked before anything is created)
+        const paymentFields = paymentFieldsFromBody(req.body, null, { requireUpiId: true });
+
         const email = String(req.body.email || '').trim().toLowerCase();
         if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || isPhoneEmail(email))) {
             return res.status(400).json({ detail: 'Please enter a valid email address or leave it blank' });
@@ -129,6 +133,7 @@ export const register = async (req, res, next) => {
                     const updates = {};
                     if (shopName) updates.name = shopName;
                     if (allowedTypes.includes(rawType)) updates.business_type = rawType;
+                    Object.assign(updates, paymentFields);
                     if (Object.keys(updates).length > 0) await Shop.update(existing.id, updates);
                 } catch (shopError) {
                     console.warn('⚠️ Could not update shop details while resuming sign up:', shopError.message);
@@ -161,7 +166,8 @@ export const register = async (req, res, next) => {
                 user_id: user.id,
                 name: shopName || `${name}'s Shop`,
                 phone,
-                business_type
+                business_type,
+                ...paymentFields
             });
             console.log('✅ Default shop created with category:', business_type);
         } catch (shopError) {

@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert, update } from '../config/database.js';
+import { parsePaymentModes, pickDefaultPaymentMode, normalizeUpiId } from '../utils/paymentModes.js';
+import { flag } from '../utils/gst.js';
 
 export default class Shop {
     constructor(data) {
@@ -19,6 +21,14 @@ export default class Shop {
         this.default_discount = Number(data.default_discount !== undefined ? data.default_discount : 0);
         this.business_type = data.business_type || 'small_business';
         this.table_count = Number(data.table_count || 10);
+        // payment modes shown on this shop's bills (all of them until the owner chooses) and the one picked first
+        this.payment_modes = parsePaymentModes(data.payment_modes);
+        this.default_payment_mode = pickDefaultPaymentMode(data.default_payment_mode, this.payment_modes);
+        // UPI ID the payment QR code on bills is made from
+        this.upi_id = normalizeUpiId(data.upi_id);
+        // GST: products carry a GST % (added to their price) / bills show the GST breakdown
+        this.gst_enabled = flag(data.gst_enabled);
+        this.gst_on_bill = this.gst_enabled ? flag(data.gst_on_bill) : 0;
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }

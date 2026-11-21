@@ -18,6 +18,10 @@ import contactRoutes from './src/routes/contactRoutes.js';
 import subscriptionRoutes from './src/routes/subscriptionRoutes.js';
 import adminRoutes from './src/routes/adminRoutes.js';
 import restaurantRoutes from './src/routes/restaurantRoutes.js';
+import pushRoutes from './src/routes/pushRoutes.js';
+import notificationRoutes from './src/routes/notificationRoutes.js';
+import { startPlanReminderTimer } from './src/services/planReminders.js';
+import { getPublicPlans } from './src/controllers/planController.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 
 dotenv.config();
@@ -116,6 +120,9 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/restaurant', restaurantRoutes);
 app.use('/api/tables', restaurantRoutes);
+app.use('/api/push', pushRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.get('/api/plans', getPublicPlans);
 
 // Root & Health check endpoints
 app.get('/', (req, res) => {
@@ -163,6 +170,8 @@ if (!process.env.VERCEL) {
         console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
         console.log(`🔗 API URL: http://127.0.0.1:${PORT}/api`);
     });
+    // daily plan reminders as push notifications (on Vercel, Vercel Cron calls /api/push/cron/plan-reminders instead)
+    startPlanReminderTimer();
 }
 
 // Handle unhandled rejections

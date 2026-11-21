@@ -1,4 +1,7 @@
 import Bill from '../models/Bill.js';
+import { query } from '../config/database.js';
+import { normalizeUnit, roundQty } from '../utils/units.js';
+import { normalizeGstRate } from '../utils/gst.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
@@ -77,7 +80,7 @@ export const createBill = async (req, res, next) => {
             }
 
             if (!Number.isFinite(quantity) || quantity <= 0) {
-                throw badRequest(`Item ${index + 1}: Quantity must be at least 1`);
+                throw badRequest(`Item ${index + 1}: Quantity must be more than 0`);
             }
 
             if (!Number.isFinite(rate) || rate < 0) {
@@ -86,7 +89,7 @@ export const createBill = async (req, res, next) => {
 
             const barcode = item.barcode ? String(item.barcode).trim() : null;
 
-            return { name, quantity, rate, barcode };
+            return { name, quantity: roundQty(quantity), rate, barcode, unit: normalizeUnit(item.unit), gst_rate: normalizeGstRate(item.gst_rate) };
         });
         
         // Get shop: auto-create default if not found
@@ -141,7 +144,10 @@ export const createBill = async (req, res, next) => {
             shop
         });
 
-        if (isInventoryType(shop?.business_type)) {
+        // Only deduct stock if bill is directly printed (!is_saved).
+        // Before printing the receipt, do NOT deduct the stock!
+        const isSaved = is_saved === true || is_saved === 'true' || is_saved === 1 || is_saved === '1';
+        if (!isSaved && isInventoryType(shop?.business_type)) {
             Inventory.syncBill(req.user.id, bill?.id, normalizedItems, bill?.number, shop).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
         }
 
@@ -204,10 +210,10 @@ export const updateBill = async (req, res, next) => {
             const rate = Number(item.rate);
 
             if (!name) throw badRequest(`Item ${index + 1}: Name is required`);
-            if (!Number.isFinite(quantity) || quantity <= 0) throw badRequest(`Item ${index + 1}: Quantity must be at least 1`);
+            if (!Number.isFinite(quantity) || quantity <= 0) throw badRequest(`Item ${index + 1}: Quantity must be more than 0`);
             if (!Number.isFinite(rate) || rate < 0) throw badRequest(`Item ${index + 1}: Rate cannot be negative`);
 
-            return { name, quantity, rate, barcode: item.barcode || null };
+            return { name, quantity: roundQty(quantity), rate, barcode: item.barcode || null, unit: normalizeUnit(item.unit), gst_rate: normalizeGstRate(item.gst_rate) };
         });
 
         // what this bill already took out of stock counts as available again
@@ -229,7 +235,13 @@ export const updateBill = async (req, res, next) => {
             items: normalizedItems
         });
 
-        await Inventory.syncBill(req.user.id, id, normalizedItems, updated?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+        const currentBill = await Bill.findByIdAndUser(id, req.user.id).catch(() => null);
+        const wasSaved = currentBill?.is_saved === 1 || currentBill?.is_saved === true;
+        // Only sync stock if the bill was ALREADY printed (is_saved === 0).
+        // If it's still a saved bill waiting to print, do NOT deduct stock before printing!
+        if (!wasSaved && isInventoryType(shop?.business_type)) {
+            await Inventory.syncBill(req.user.id, id, normalizedItems, updated?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+        }
 
         res.json(updated);
     } catch (err) {
@@ -288,6 +300,13 @@ export const markBillAsPrinted = async (req, res, next) => {
             } catch (e) {}
         }
 
+        // Receipt is printed: deduct stock now for inventory shops!
+        const shop = await Shop.findByUserId(req.user.id).catch(() => null);
+        if (isInventoryType(shop?.business_type)) {
+            const billItems = Array.isArray(bill.items) ? bill.items : (typeof bill.items === 'string' ? JSON.parse(bill.items || '[]') : []);
+            await Inventory.syncBill(req.user.id, bill.id, billItems, bill.number, shop).catch((e) => console.warn('⚠️ Stock deduction on print:', e.message));
+        }
+
         res.json({ message: 'Bill marked as printed', success: true, id, table_number: tableNum });
     } catch (err) {
         next(err);
@@ -297,12 +316,29 @@ export const markBillAsPrinted = async (req, res, next) => {
 export const markTableBillsAsPrinted = async (req, res, next) => {
     try {
         const { tableNumber } = req.params;
+        const cleanTable = String(tableNumber || '').trim();
+        // Fetch saved bills for table before markAsPrinted moves them from saved_bills
+        const savedRows = await query(
+            'SELECT id, number, items FROM saved_bills WHERE user_id = ? AND (table_number = ? OR table_number = ?)',
+            [req.user.id, cleanTable, `Table ${cleanTable}`]
+        ).catch(() => []);
+
         const count = await Bill.markTableAsPrinted(tableNumber, req.user.id);
         if (tableNumber) {
             try {
                 await RestaurantTable.resetTable(req.user.id, tableNumber);
             } catch (e) {}
         }
+
+        // Receipt is printed: deduct stock for these table bills
+        const shop = await Shop.findByUserId(req.user.id).catch(() => null);
+        if (isInventoryType(shop?.business_type) && Array.isArray(savedRows)) {
+            for (const r of savedRows) {
+                const billItems = Array.isArray(r.items) ? r.items : (typeof r.items === 'string' ? JSON.parse(r.items || '[]') : []);
+                await Inventory.syncBill(req.user.id, r.id, billItems, r.number, shop).catch((e) => console.warn('⚠️ Stock update for table bill print:', e.message));
+            }
+        }
+
         res.json({ message: 'Table bills marked as printed', success: true, count, table_number: tableNumber });
     } catch (err) {
         next(err);

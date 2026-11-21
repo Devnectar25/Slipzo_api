@@ -159,6 +159,128 @@ export const ensureInventorySchema = async () => {
                     CREATE INDEX IF NOT EXISTS idx_stock_movements_bill ON stock_movements(bill_id);
                 `);
             }
+            // Loose items: a measuring unit per item and on each bill line, and quantities with decimals (2.5 kg).
+            // Each step on its own, so one failure does not skip the rest.
+            const step = async (label, fn) => { try { await fn(); } catch (e) { console.warn(`⚠️ Loose-item schema (${label}):`, e.message); } };
+            await step('item unit', async () => {
+                const unitCol = await pgPool.query(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name = 'user_menu_items' AND column_name = 'unit'"
+                );
+                if (!unitCol.rowCount) await pgPool.query('ALTER TABLE user_menu_items ADD COLUMN IF NOT EXISTS unit TEXT');
+            });
+            await step('stock decimals', async () => {
+                const cols = await pgPool.query(
+                    "SELECT table_name, column_name FROM information_schema.columns WHERE ((table_name = 'user_menu_items' AND column_name IN ('stock_qty', 'low_stock_alert')) OR (table_name = 'stock_movements' AND column_name IN ('change', 'balance_after'))) AND numeric_scale IS DISTINCT FROM 3"
+                );
+                for (const c of cols.rows || []) {
+                    await pgPool.query(`ALTER TABLE ${c.table_name} ALTER COLUMN ${c.column_name} TYPE NUMERIC(14,3)`);
+                }
+            });
+            await step('bill quantity decimals', async () => {
+                const intQty = await pgPool.query(
+                    "SELECT table_name FROM information_schema.columns WHERE table_name IN ('bill_items', 'saved_bill_items', 'print_bill_items') AND column_name = 'quantity' AND data_type = 'integer'"
+                );
+                for (const row of intQty.rows || []) {
+                    await pgPool.query(`ALTER TABLE ${row.table_name} ALTER COLUMN quantity TYPE NUMERIC(14,3)`);
+                }
+            });
+            await step('bill line unit', async () => {
+                const lineUnit = await pgPool.query(
+                    "SELECT table_name FROM information_schema.columns WHERE table_name IN ('bill_items', 'saved_bill_items', 'print_bill_items') AND column_name = 'unit'"
+                );
+                if ((lineUnit.rowCount || 0) < 3) {
+                    for (const tbl of ['bill_items', 'saved_bill_items', 'print_bill_items']) {
+                        await pgPool.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS unit TEXT`).catch(() => null);
+                    }
+                }
+            });
+            await step('gst', async () => {
+                const cols = await pgPool.query(
+                    "SELECT table_name, column_name FROM information_schema.columns WHERE (table_name = 'user_menu_items' AND column_name = 'gst_rate') OR (table_name = 'shops' AND column_name IN ('gst_enabled', 'gst_on_bill')) OR (table_name IN ('bill_items', 'saved_bill_items', 'print_bill_items') AND column_name = 'gst_rate')"
+                );
+                if ((cols.rowCount || 0) < 6) {
+                    await pgPool.query('ALTER TABLE user_menu_items ADD COLUMN IF NOT EXISTS gst_rate NUMERIC(5,2) DEFAULT 0');
+                    await pgPool.query('ALTER TABLE shops ADD COLUMN IF NOT EXISTS gst_enabled INTEGER DEFAULT 0');
+                    await pgPool.query('ALTER TABLE shops ADD COLUMN IF NOT EXISTS gst_on_bill INTEGER DEFAULT 0');
+                    for (const tbl of ['bill_items', 'saved_bill_items', 'print_bill_items']) {
+                        await pgPool.query(`ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS gst_rate NUMERIC(5,2) DEFAULT 0`).catch(() => null);
+                    }
+                }
+            });
+            await step('shop payment modes', async () => {
+                const cols = await pgPool.query(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name = 'shops' AND column_name IN ('payment_modes', 'default_payment_mode', 'upi_id')"
+                );
+                if ((cols.rowCount || 0) < 3) {
+                    await pgPool.query('ALTER TABLE shops ADD COLUMN IF NOT EXISTS payment_modes TEXT');
+                    await pgPool.query('ALTER TABLE shops ADD COLUMN IF NOT EXISTS default_payment_mode TEXT');
+                    await pgPool.query('ALTER TABLE shops ADD COLUMN IF NOT EXISTS upi_id TEXT');
+                }
+            });
+            // in-app notifications (the bell): each user's own notices and when they last opened the list
+            await step('in-app notifications', async () => {
+                const t = await pgPool.query("SELECT to_regclass('public.user_notifications') AS a, to_regclass('public.notification_state') AS b");
+                const r = t.rows[0] || {};
+                if (!r.a || !r.b) {
+                    await pgPool.query(`
+                        CREATE TABLE IF NOT EXISTS user_notifications (
+                            id TEXT PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            body TEXT NOT NULL,
+                            view TEXT,
+                            dedupe_key TEXT NOT NULL,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_once ON user_notifications(user_id, dedupe_key);
+                        CREATE INDEX IF NOT EXISTS idx_user_notifications_user ON user_notifications(user_id, created_at);
+                        CREATE TABLE IF NOT EXISTS notification_state (
+                            user_id TEXT PRIMARY KEY,
+                            seen_at TIMESTAMP WITH TIME ZONE
+                        );
+                    `);
+                }
+            });
+            // push notifications: each phone's FCM token, reminders already sent, and admin messages
+            await step('push notifications', async () => {
+                const t = await pgPool.query("SELECT to_regclass('public.push_tokens') AS a, to_regclass('public.push_log') AS b, to_regclass('public.push_messages') AS c");
+                const r = t.rows[0] || {};
+                if (!r.a || !r.b || !r.c) {
+                    await pgPool.query(`
+                        CREATE TABLE IF NOT EXISTS push_tokens (
+                            id TEXT PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            token TEXT NOT NULL,
+                            platform TEXT DEFAULT 'android',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id);
+                        CREATE INDEX IF NOT EXISTS idx_push_tokens_token ON push_tokens(token);
+                        CREATE TABLE IF NOT EXISTS push_log (
+                            id TEXT PRIMARY KEY,
+                            user_id TEXT NOT NULL,
+                            dedupe_key TEXT NOT NULL,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_push_log_once ON push_log(user_id, dedupe_key);
+                        CREATE TABLE IF NOT EXISTS push_messages (
+                            id TEXT PRIMARY KEY,
+                            kind TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            body TEXT NOT NULL,
+                            code TEXT,
+                            target TEXT DEFAULT 'all',
+                            users INTEGER DEFAULT 0,
+                            sent_count INTEGER DEFAULT 0,
+                            failed_count INTEGER DEFAULT 0,
+                            sent_by TEXT,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                    `);
+                }
+            });
             const oldIdx = await pgPool.query("SELECT 1 FROM pg_indexes WHERE tablename = 'menu_items' AND indexname = 'idx_menu_items_barcode'");
             if (oldIdx.rowCount) {
                 await pgPool.query(`
@@ -170,7 +292,35 @@ export const ensureInventorySchema = async () => {
             for (const sql of [
                 'ALTER TABLE user_menu_items ADD COLUMN stock_qty REAL',
                 'ALTER TABLE user_menu_items ADD COLUMN low_stock_alert REAL DEFAULT 5',
-                'ALTER TABLE user_menu_items ADD COLUMN track_stock INTEGER DEFAULT 0'
+                'ALTER TABLE user_menu_items ADD COLUMN track_stock INTEGER DEFAULT 0',
+                // loose items (SQLite keeps decimals in INTEGER columns, so only the unit columns are new)
+                'ALTER TABLE user_menu_items ADD COLUMN unit TEXT',
+                'ALTER TABLE bill_items ADD COLUMN unit TEXT',
+                'ALTER TABLE saved_bill_items ADD COLUMN unit TEXT',
+                'ALTER TABLE print_bill_items ADD COLUMN unit TEXT',
+                // payment modes the shop takes
+                'ALTER TABLE shops ADD COLUMN payment_modes TEXT',
+                'ALTER TABLE shops ADD COLUMN default_payment_mode TEXT',
+                'ALTER TABLE shops ADD COLUMN upi_id TEXT',
+                // GST per product, the shop's GST switches, and the rate on each bill line
+                'ALTER TABLE user_menu_items ADD COLUMN gst_rate REAL DEFAULT 0',
+                'ALTER TABLE shops ADD COLUMN gst_enabled INTEGER DEFAULT 0',
+                'ALTER TABLE shops ADD COLUMN gst_on_bill INTEGER DEFAULT 0',
+                'ALTER TABLE bill_items ADD COLUMN gst_rate REAL DEFAULT 0',
+                'ALTER TABLE saved_bill_items ADD COLUMN gst_rate REAL DEFAULT 0',
+                'ALTER TABLE print_bill_items ADD COLUMN gst_rate REAL DEFAULT 0'
+            ]) {
+                try { await sqliteRun(sql); } catch (_) { /* already there */ }
+            }
+            // push notifications
+            for (const sql of [
+                `CREATE TABLE IF NOT EXISTS push_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token TEXT NOT NULL, platform TEXT DEFAULT 'android', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+                `CREATE TABLE IF NOT EXISTS push_log (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, dedupe_key TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+                `CREATE UNIQUE INDEX IF NOT EXISTS idx_push_log_once ON push_log(user_id, dedupe_key)`,
+                `CREATE TABLE IF NOT EXISTS user_notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, view TEXT, dedupe_key TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+                `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_once ON user_notifications(user_id, dedupe_key)`,
+                `CREATE TABLE IF NOT EXISTS notification_state (user_id TEXT PRIMARY KEY, seen_at TEXT)`,
+                `CREATE TABLE IF NOT EXISTS push_messages (id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, code TEXT, target TEXT DEFAULT 'all', users INTEGER DEFAULT 0, sent_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0, sent_by TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)`
             ]) {
                 try { await sqliteRun(sql); } catch (_) { /* already there */ }
             }
@@ -222,6 +372,216 @@ export const ensureAuthSchema = async () => {
     }
 };
 
+const ensurePlansSchema = async () => {
+    try {
+        if (isPg) {
+            const table = await pgPool.query("SELECT to_regclass('public.plans') AS t");
+            if (!table.rows[0]?.t) {
+                await pgPool.query(`
+                    CREATE TABLE IF NOT EXISTS plans (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        plan_type TEXT NOT NULL DEFAULT 'print',
+                        duration_months INTEGER DEFAULT 0,
+                        duration_label TEXT,
+                        prints_count INTEGER DEFAULT 0,
+                        price NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+                        original_price NUMERIC(10,2),
+                        description TEXT,
+                        features TEXT,
+                        is_popular BOOLEAN DEFAULT FALSE,
+                        status TEXT DEFAULT 'active',
+                        sort_order INTEGER DEFAULT 0,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_plans_type_status ON plans(plan_type, status);
+                `);
+            }
+            const countRes = await pgPool.query("SELECT COUNT(*) as cnt FROM plans");
+            if (Number(countRes.rows[0]?.cnt || 0) === 0) {
+                await seedInitialPlans(true);
+            }
+        } else {
+            await sqliteRun(`CREATE TABLE IF NOT EXISTS plans (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                plan_type TEXT NOT NULL DEFAULT 'print',
+                duration_months INTEGER DEFAULT 0,
+                duration_label TEXT,
+                prints_count INTEGER DEFAULT 0,
+                price REAL NOT NULL DEFAULT 0.0,
+                original_price REAL,
+                description TEXT,
+                features TEXT,
+                is_popular INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )`);
+            const row = await sqliteGet("SELECT COUNT(*) as cnt FROM plans");
+            if (Number(row?.cnt || 0) === 0) {
+                await seedInitialPlans(false);
+            }
+        }
+    } catch (err) {
+        console.warn('⚠️ Plans schema check:', err.message);
+    }
+};
+
+const seedInitialPlans = async (isPgMode) => {
+    const defaultPlans = [
+        {
+            id: 'time_1m',
+            name: '1 Month Plan',
+            plan_type: 'time',
+            duration_months: 1,
+            duration_label: '1 Month',
+            prints_count: 10000,
+            price: 299,
+            original_price: 399,
+            description: 'Full access for 1 month with unlimited receipts and thermal printing.',
+            features: JSON.stringify([
+                '1 Month unlimited access',
+                'Up to 10,000 prints included',
+                'All receipt templates included',
+                'Thermal & POS printer support',
+                'Shop profile & logo branding',
+                'Email & chat support'
+            ]),
+            is_popular: false,
+            sort_order: 1
+        },
+        {
+            id: 'time_3m',
+            name: '3 Months Plan',
+            plan_type: 'time',
+            duration_months: 3,
+            duration_label: '3 Months',
+            prints_count: 30000,
+            price: 799,
+            original_price: 999,
+            description: 'Quarterly growth plan - save ₹100 compared to monthly billing.',
+            features: JSON.stringify([
+                '3 Months full access',
+                'Up to 30,000 prints included',
+                'Save 15% on monthly cost',
+                'WhatsApp receipt sharing',
+                'Sales analytics & Excel export',
+                'Priority customer support'
+            ]),
+            is_popular: true,
+            sort_order: 2
+        },
+        {
+            id: 'time_1y',
+            name: '1 Year Plan',
+            plan_type: 'time',
+            duration_months: 12,
+            duration_label: '1 Year',
+            prints_count: 120000,
+            price: 2499,
+            original_price: 3588,
+            description: 'Best value annual plan - save ₹1,089 (over 30% OFF).',
+            features: JSON.stringify([
+                '1 Year full unlimited access',
+                'Best value (Save > 30%)',
+                'Multi-device & counter sync',
+                'All premium receipt templates',
+                'Dynamic UPI QR payment codes',
+                'Dedicated account manager',
+                '24/7 priority support'
+            ]),
+            is_popular: false,
+            sort_order: 3
+        },
+        {
+            id: 'print_starter',
+            name: 'Starter Pack',
+            plan_type: 'print',
+            duration_months: 0,
+            duration_label: 'Pay Per Print',
+            prints_count: 1000,
+            price: 250,
+            original_price: null,
+            description: 'Perfect for small shops and new merchants getting started with digital billing.',
+            features: JSON.stringify([
+                '1,000 prints total',
+                '₹0.25 per print standard rate',
+                'All receipt templates included',
+                'Thermal & POS printer support',
+                'Basic shop profile & logo',
+                'Email & chat support'
+            ]),
+            is_popular: false,
+            sort_order: 10
+        },
+        {
+            id: 'print_pro',
+            name: 'Pro Growth',
+            plan_type: 'print',
+            duration_months: 0,
+            duration_label: 'Pay Per Print',
+            prints_count: 2000,
+            price: 450,
+            original_price: 500,
+            description: 'Our most popular pack for active daily checkout counters.',
+            features: JSON.stringify([
+                '2,000 prints total',
+                'Save ₹50 (10% OFF)',
+                '₹0.225 per print effective rate',
+                'Advanced shop customization',
+                'Sales analytics & Excel/CSV export',
+                'WhatsApp receipt sharing',
+                'Priority customer support'
+            ]),
+            is_popular: true,
+            sort_order: 11
+        },
+        {
+            id: 'print_business',
+            name: 'Business Super',
+            plan_type: 'print',
+            duration_months: 0,
+            duration_label: 'Pay Per Print',
+            prints_count: 5000,
+            price: 1000,
+            original_price: 1250,
+            description: 'Maximum savings for high-volume retail stores & multi-counter setups.',
+            features: JSON.stringify([
+                '5,000 prints total',
+                'Save ₹250 (20% OFF)',
+                '₹0.20 per print effective rate',
+                'Everything in Pro Growth',
+                'Multi-device & counter sync',
+                'Dynamic UPI QR payment codes',
+                'Dedicated account manager',
+                '24/7 priority support'
+            ]),
+            is_popular: false,
+            sort_order: 12
+        }
+    ];
+
+    for (const p of defaultPlans) {
+        if (isPgMode) {
+            await pgPool.query(
+                `INSERT INTO plans (id, name, plan_type, duration_months, duration_label, prints_count, price, original_price, description, features, is_popular, status, sort_order)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12)
+                 ON CONFLICT (id) DO NOTHING`,
+                [p.id, p.name, p.plan_type, p.duration_months, p.duration_label, p.prints_count, p.price, p.original_price, p.description, p.features, p.is_popular, p.sort_order]
+            );
+        } else {
+            await sqliteRun(
+                `INSERT OR IGNORE INTO plans (id, name, plan_type, duration_months, duration_label, prints_count, price, original_price, description, features, is_popular, status, sort_order)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+                [p.id, p.name, p.plan_type, p.duration_months, p.duration_label, p.prints_count, p.price, p.original_price, p.description, p.features, p.is_popular ? 1 : 0, p.sort_order]
+            );
+        }
+    }
+};
+
 export const initDatabase = async () => {
     if (isDbInitialized) return;
     try {
@@ -233,6 +593,7 @@ export const initDatabase = async () => {
                     console.log('⚡ Database schema already initialized, skipping heavy DDL migrations.');
                     await ensureInventorySchema();
                     await ensureAuthSchema();
+                    await ensurePlansSchema();
                     isDbInitialized = true;
                     return;
                 }
@@ -256,6 +617,10 @@ export const initDatabase = async () => {
                     );
                     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_name TEXT;
                     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_email TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_id TEXT;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_type TEXT DEFAULT 'print';
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_months INTEGER DEFAULT 0;
+                    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE;
                     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_name TEXT;
                     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0.00;
                     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS prints_count INTEGER DEFAULT 0;
@@ -636,6 +1001,7 @@ export const initDatabase = async () => {
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS product_link TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS image TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS images TEXT;
+                ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;
                 ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
 
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -673,6 +1039,10 @@ export const initDatabase = async () => {
 
                 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_name TEXT;
                 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_email TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_id TEXT;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_type TEXT DEFAULT 'print';
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_months INTEGER DEFAULT 0;
+                ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE;
                 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_name TEXT;
                 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2) DEFAULT 0.00;
                 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS prints_count INTEGER DEFAULT 0;
@@ -979,6 +1349,7 @@ export const initDatabase = async () => {
 
             try { await sqliteRun('ALTER TABLE products ADD COLUMN image TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE products ADD COLUMN images TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE products ADD COLUMN description TEXT'); } catch (_) { }
             try { await sqliteRun("ALTER TABLE products ADD COLUMN status TEXT DEFAULT 'active'"); } catch (_) { }
 
             await sqliteRun(`
@@ -1135,6 +1506,10 @@ export const initDatabase = async () => {
 
             try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_name TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN user_email TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_id TEXT'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_type TEXT DEFAULT "print"'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN duration_months INTEGER DEFAULT 0'); } catch (_) { }
+            try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN expires_at DATETIME'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN plan_name TEXT'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN amount NUMERIC(10,2) DEFAULT 0.00'); } catch (_) { }
             try { await sqliteRun('ALTER TABLE subscriptions ADD COLUMN prints_count INTEGER DEFAULT 0'); } catch (_) { }
@@ -1178,6 +1553,7 @@ export const initDatabase = async () => {
         }
         await ensureInventorySchema();
         await ensureAuthSchema();
+        await ensurePlansSchema();
         isDbInitialized = true;
     } catch (err) {
         console.error('❌ Failed to initialize database:', err.message);
