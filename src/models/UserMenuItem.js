@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert, update } from '../config/database.js';
+import { normalizeUnit } from '../utils/units.js';
+import { normalizeGstRate } from '../utils/gst.js';
 
 export default class UserMenuItem {
     constructor(data) {
@@ -24,6 +26,10 @@ export default class UserMenuItem {
         this.track_stock = rawTrack === true || rawTrack === 1 || rawTrack === '1' || rawTrack === 't' || rawTrack === 'true';
         this.stock_qty = data.stock_qty === null || data.stock_qty === undefined ? null : Number(data.stock_qty);
         this.low_stock_alert = data.low_stock_alert === null || data.low_stock_alert === undefined ? 5 : Number(data.low_stock_alert);
+        // loose item: sold by this measuring unit (kg, g, l, ml, m, dozen); null = counted in pieces
+        this.unit = normalizeUnit(data.unit);
+        // GST % added on top of the selling price (used when the shop has GST turned on)
+        this.gst_rate = normalizeGstRate(data.gst_rate);
         this.created_at = data.created_at;
         this.updated_at = data.updated_at;
     }
@@ -41,6 +47,8 @@ export default class UserMenuItem {
                 umi.stock_qty,
                 umi.low_stock_alert,
                 umi.track_stock,
+                umi.unit,
+                umi.gst_rate,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -106,6 +114,8 @@ export default class UserMenuItem {
                 umi.stock_qty,
                 umi.low_stock_alert,
                 umi.track_stock,
+                umi.unit,
+                umi.gst_rate,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -143,6 +153,8 @@ export default class UserMenuItem {
                 umi.stock_qty,
                 umi.low_stock_alert,
                 umi.track_stock,
+                umi.unit,
+                umi.gst_rate,
                 umi.created_at,
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
@@ -175,12 +187,14 @@ export default class UserMenuItem {
 
     static async create(userId, menuItemId, customPrice, barcodeActive = true, stock = null) {
         const isBActive = barcodeActive !== false;
+        const unit = stock && stock.unit !== undefined ? normalizeUnit(stock.unit) : undefined;
+        const gstRate = stock && stock.gstRate !== undefined ? normalizeGstRate(stock.gstRate) : undefined;
         const existing = await UserMenuItem.findByUserAndMenuItem(userId, menuItemId);
         if (existing) {
             const numPrice = Math.max(0, parseFloat(customPrice) || 0);
             await update(
                 'user_menu_items',
-                { custom_price: numPrice, is_active: true, barcode_active: isBActive, updated_at: new Date().toISOString() },
+                { custom_price: numPrice, is_active: true, barcode_active: isBActive, ...(unit !== undefined ? { unit } : {}), ...(gstRate !== undefined ? { gst_rate: gstRate } : {}), updated_at: new Date().toISOString() },
                 'id = ? AND user_id = ?',
                 [existing.id, userId]
             );
@@ -229,6 +243,8 @@ export default class UserMenuItem {
             custom_price: numPrice,
             is_active: true,
             barcode_active: isBActive,
+            unit: unit || null,
+            gst_rate: gstRate || 0,
             created_at: now,
             updated_at: now
         };
@@ -277,6 +293,12 @@ export default class UserMenuItem {
         }
         if (updates.track_stock !== undefined) {
             updateFields.track_stock = Boolean(updates.track_stock);
+        }
+        if (updates.unit !== undefined) {
+            updateFields.unit = normalizeUnit(updates.unit);
+        }
+        if (updates.gst_rate !== undefined) {
+            updateFields.gst_rate = normalizeGstRate(updates.gst_rate);
         }
         updateFields.updated_at = new Date().toISOString();
 

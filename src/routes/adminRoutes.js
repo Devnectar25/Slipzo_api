@@ -5,6 +5,9 @@ import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 import { query, queryOne, supabase } from '../config/database.js';
 import ContactSubmission from '../models/ContactSubmission.js';
 import MenuItem from '../models/MenuItem.js';
+import { getAdminPlans, createPlan, updatePlan, deletePlan } from '../controllers/planController.js';
+import Push from '../models/Push.js';
+import { isPushConfigured } from '../utils/push.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
@@ -309,6 +312,7 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
                 p.price, 
                 p.category, 
                 p.product_link,
+                p.description,
                 p.tax_rate, 
                 p.stock as stock_quantity, 
                 p.image,
@@ -338,7 +342,7 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
 // Create New Admin Product with Photos
 router.post('/products', adminAuthMiddleware, async (req, res) => {
     try {
-        const { name, category, price, product_link, images, image, status } = req.body;
+        const { name, category, price, product_link, description, images, image, status } = req.body;
         if (!name || !name.trim()) {
             return res.status(400).json({ detail: 'Product name is required' });
         }
@@ -469,8 +473,8 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 
         // Master products database table insert
         await query(
-            `INSERT INTO products (id, user_id, name, price, category, product_link, stock, image, images, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO products (id, user_id, name, price, category, product_link, description, stock, image, images, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 id,
                 userId,
@@ -478,6 +482,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
                 parseFloat(price) || 0,
                 category ? category.trim() : 'General',
                 cleanLink,
+                description ? description.trim() : '',
                 100,
                 mainImage,
                 imagesJson,
@@ -499,7 +504,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, name, price, category, product_link, tax_rate, stock, image } = req.body;
+        const { status, name, price, category, product_link, description, tax_rate, stock, image } = req.body;
 
         let existing = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
         if (!existing && name) {
@@ -515,13 +520,14 @@ router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
         const newPrice = price !== undefined ? parseFloat(price) : existing.price;
         const newCat = category !== undefined ? category.trim() : existing.category;
         const newLink = product_link !== undefined ? (product_link ? product_link.trim() : '') : (existing.product_link || '');
+        const newDesc = description !== undefined ? (description ? description.trim() : '') : (existing.description || '');
         const newImage = image !== undefined ? (image ? image.trim() : '') : (existing.image || '');
         const newStock = stock !== undefined ? parseInt(stock) : existing.stock;
         const now = new Date().toISOString();
 
         await query(
-            `UPDATE products SET name = ?, price = ?, category = ?, product_link = ?, stock = ?, image = ?, status = ?, updated_at = ? WHERE id = ?`,
-            [newName, newPrice, newCat, newLink, newStock, newImage, newStatus, now, targetId]
+            `UPDATE products SET name = ?, price = ?, category = ?, product_link = ?, description = ?, stock = ?, image = ?, status = ?, updated_at = ? WHERE id = ?`,
+            [newName, newPrice, newCat, newLink, newDesc, newStock, newImage, newStatus, now, targetId]
         );
 
         const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
@@ -603,6 +609,53 @@ router.get('/plan-buyers', adminAuthMiddleware, async (req, res) => {
         return res.status(500).json({ detail: 'Failed to fetch plan buyers' });
     }
 });
+
+// Plans Management (Create & Edit all Time-based and Print-based plans)
+// ---------- Push notifications to the app (announcements, discount offers, plan reminders) ----------
+router.get('/push/status', adminAuthMiddleware, async (req, res, next) => {
+    try {
+        res.json({ configured: isPushConfigured(), ...(await Push.deviceCount()) });
+    } catch (err) { next(err); }
+});
+
+router.get('/push/messages', adminAuthMiddleware, async (req, res, next) => {
+    try {
+        res.json(await Push.listMessages(Number(req.query.limit) || 50));
+    } catch (err) { next(err); }
+});
+
+router.post('/push/send', adminAuthMiddleware, async (req, res, next) => {
+    try {
+        const title = String(req.body?.title || '').trim();
+        const body = String(req.body?.body || '').trim();
+        const kind = ['announcement', 'discount', 'plan_reminder'].includes(req.body?.kind) ? req.body.kind : 'announcement';
+        const code = String(req.body?.code || '').trim().toUpperCase().slice(0, 30);
+        if (title.length < 3 || title.length > 100) return res.status(400).json({ detail: 'Title must be 3 to 100 characters' });
+        if (body.length < 3 || body.length > 500) return res.status(400).json({ detail: 'Message must be 3 to 500 characters' });
+        // always shown in the app's notification bell; also pushed to phones when Firebase is set up
+
+        // target: everyone with the app, or one user found by mobile number
+        let target = 'all';
+        const phone = String(req.body?.phone || '').trim();
+        if (req.body?.target === 'user') {
+            const digits = phone.replace(/\D/g, '').slice(-10);
+            if (digits.length !== 10) return res.status(400).json({ detail: 'Enter the 10-digit mobile number of the user' });
+            const user = await queryOne("SELECT id FROM users WHERE phone = ? OR phone = ? OR phone = ?", [digits, `91${digits}`, `+91${digits}`]);
+            if (!user) return res.status(404).json({ detail: 'No user with that mobile number' });
+            target = user.id;
+        }
+
+        // discounts and plan reminders open the Pricing page when tapped
+        const view = kind === 'announcement' ? '' : 'pricing';
+        const result = await Push.sendAdminMessage({ title, body, kind, code, view, target, sentBy: req.admin?.email || req.admin?.username || 'admin' });
+        res.json(result);
+    } catch (err) { next(err); }
+});
+
+router.get('/plans', adminAuthMiddleware, getAdminPlans);
+router.post('/plans', adminAuthMiddleware, createPlan);
+router.put('/plans/:id', adminAuthMiddleware, updatePlan);
+router.delete('/plans/:id', adminAuthMiddleware, deletePlan);
 
 // Grant Print Credits to User Shop
 router.post('/users/:id/grant-prints', adminAuthMiddleware, async (req, res) => {

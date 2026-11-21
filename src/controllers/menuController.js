@@ -196,7 +196,9 @@ export const createMenuItem = async (req, res, next) => {
             barcode,
             barcode_active,
             stock_qty,
-            low_stock_alert
+            low_stock_alert,
+            unit,
+            gst_rate
         } = req.body;
 
         let targetMenuItemId = menu_item_id;
@@ -329,7 +331,7 @@ export const createMenuItem = async (req, res, next) => {
         }
 
         // Add to user_menu_items
-        const userItem = await UserMenuItem.create(req.user.id, targetMenuItemId, numericPrice, isBActive, { qty: stock_qty, lowAlert: low_stock_alert });
+        const userItem = await UserMenuItem.create(req.user.id, targetMenuItemId, numericPrice, isBActive, { qty: stock_qty, lowAlert: low_stock_alert, unit, gstRate: gst_rate });
         res.status(201).json(userItem);
     } catch (err) {
         next(err);
@@ -343,7 +345,7 @@ export const createMenuItem = async (req, res, next) => {
 export const updateMenuItem = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { price, custom_price, is_active, barcode_active, low_stock_alert, track_stock } = req.body;
+        const { price, custom_price, is_active, barcode_active, low_stock_alert, track_stock, unit, gst_rate } = req.body;
 
         if (price !== undefined || custom_price !== undefined) {
             const rawPrice = custom_price !== undefined ? custom_price : price;
@@ -365,6 +367,8 @@ export const updateMenuItem = async (req, res, next) => {
         }
         if (low_stock_alert !== undefined) updates.low_stock_alert = low_stock_alert;
         if (track_stock !== undefined) updates.track_stock = track_stock;
+        if (unit !== undefined) updates.unit = unit;
+        if (gst_rate !== undefined) updates.gst_rate = gst_rate;
 
         const updated = await UserMenuItem.update(id, req.user.id, updates);
 

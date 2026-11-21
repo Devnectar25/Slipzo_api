@@ -11,5 +11,11 @@
       "src": "/(.*)",
       "dest": "server.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/push/cron/plan-reminders",
+      "schedule": "30 3 * * *"
+    }
   ]
 }

@@ -9,17 +9,37 @@ export const createPaymentOrder = async (req, res, next) => {
     if (!req.user?.id) {
       return res.status(401).json({ detail: 'Please sign in to buy prints.' });
     }
-    const prints = Number(req.body?.prints_count);
-    const price = priceForPrints(prints);
+    const planId = req.body?.plan_id;
+    const planName = req.body?.plan_name;
+    let prints = Number(req.body?.prints_count);
+    let price = null;
+
+    if (planId || planName) {
+      const pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', planName || '', 'active']);
+      if (pRows && pRows.length > 0) {
+        price = Math.round(Number(pRows[0].price));
+        if (!prints && pRows[0].prints_count) {
+          prints = Number(pRows[0].prints_count);
+        }
+      }
+    }
+
     if (price === null) {
-      return res.status(400).json({ detail: `Pack size must be a whole number between ${MIN_PRINTS} and ${MAX_PRINTS} prints.` });
+      price = priceForPrints(prints);
+    }
+    if (price === null && req.body?.amount) {
+      price = Math.round(Number(req.body.amount));
+    }
+
+    if (price === null || isNaN(price) || price <= 0) {
+      return res.status(400).json({ detail: `Invalid plan or price.` });
     }
     if (!paymentsConfigured()) {
       console.error('❌ RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set: cannot open a payment order');
       return res.status(503).json({ detail: 'Payment verification is not configured on the server.', code: 'NOT_CONFIGURED' });
     }
     const receipt = `slp_${Date.now().toString(36)}_${String(req.user.id).replace(/-/g, '').slice(0, 10)}`;
-    const made = await createOrder(price, receipt, { user_id: String(req.user.id), prints: String(prints), plan_name: String(req.body?.plan_name || '').slice(0, 60) });
+    const made = await createOrder(price, receipt, { user_id: String(req.user.id), prints: String(prints || 0), plan_name: String(req.body?.plan_name || '').slice(0, 60) });
     if (!made.ok) {
       const status = made.code === 'GATEWAY_UNREACHABLE' ? 502 : 502;
       return res.status(status).json({ detail: made.detail, code: made.code });
@@ -53,11 +73,30 @@ export const createSubscription = async (req, res, next) => {
       return res.status(400).json({ detail: 'Plan name is required' });
     }
 
-    // The server, not the browser, decides what a pack costs
-    const prints = Number(prints_count);
-    const price = priceForPrints(prints);
+    // Determine price and prints: check plans table first, then calculate for custom packs
+    const planId = req.body?.plan_id;
+    let prints = Number(prints_count) || 0;
+    let price = null;
+
+    if (planId || plan_name) {
+      const pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', plan_name || '', 'active']);
+      if (pRows && pRows.length > 0) {
+        price = Math.round(Number(pRows[0].price));
+        if (!prints && pRows[0].prints_count) {
+          prints = Number(pRows[0].prints_count);
+        }
+      }
+    }
+
     if (price === null) {
-      return res.status(400).json({ detail: `Pack size must be a whole number between ${MIN_PRINTS} and ${MAX_PRINTS} prints.` });
+      price = priceForPrints(prints);
+    }
+    if (price === null && req.body?.amount) {
+      price = Math.round(Number(req.body.amount));
+    }
+
+    if (price === null || isNaN(price) || price <= 0) {
+      return res.status(400).json({ detail: `Invalid plan price.` });
     }
 
     const paymentId = String(payment_id || '').trim();
@@ -92,15 +131,27 @@ export const createSubscription = async (req, res, next) => {
 
     let subscription;
     try {
+      const planRow = pRows && pRows.length > 0 ? pRows[0] : null;
+      let planType = planRow?.plan_type || 'print';
+      let durationMonths = Number(planRow?.duration_months || 0);
+      if (!durationMonths) {
+        if (/1\s*year/i.test(plan_name)) { planType = 'time'; durationMonths = 12; }
+        else if (/3\s*month/i.test(plan_name)) { planType = 'time'; durationMonths = 3; }
+        else if (/1\s*month/i.test(plan_name)) { planType = 'time'; durationMonths = 1; }
+      }
+
       subscription = await Subscription.create({
-      user_id: req.user.id,
-      user_name: req.user.name || 'Slipzen Member',
-      user_email: req.user.email,
-      plan_name,
-      amount: price,
-      prints_count: prints,
-      payment_id: paymentId,
-      payment_status: 'completed'
+        user_id: req.user.id,
+        user_name: req.user.name || 'Slipzen Member',
+        user_email: req.user.email,
+        plan_id: planId || planRow?.id || null,
+        plan_type: planType,
+        duration_months: durationMonths,
+        plan_name,
+        amount: price,
+        prints_count: prints,
+        payment_id: paymentId,
+        payment_status: 'completed'
       });
     } catch (createErr) {
       // The database refuses a second record for the same payment id

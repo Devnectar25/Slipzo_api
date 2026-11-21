@@ -3,6 +3,8 @@ import UserMenuItem from '../models/UserMenuItem.js';
 import RestaurantTable from '../models/RestaurantTable.js';
 import { query, supabase } from '../config/database.js';
 import { clearUserAuthCache } from '../middleware/auth.js';
+import { paymentFieldsFromBody } from '../utils/paymentModes.js';
+import { flag } from '../utils/gst.js';
 
 const BUCKET_NAME = 'Shop_Profile';
 
@@ -157,6 +159,17 @@ export const updateShop = async (req, res, next) => {
         updates.business_type = newType;
       }
     }
+
+    // payment modes the shop takes (shown on the bill, stored as "Cash,UPI") and the UPI ID for the payment QR code
+    if (req.body.payment_modes !== undefined || req.body.default_payment_mode !== undefined || req.body.upi_id !== undefined) {
+      const current = await Shop.findByUserId(req.user.id);
+      Object.assign(updates, paymentFieldsFromBody(req.body, current));
+    }
+
+    // GST switches: products carry GST, and whether bills show the GST breakdown
+    if (req.body.gst_enabled !== undefined) updates.gst_enabled = flag(req.body.gst_enabled);
+    if (req.body.gst_on_bill !== undefined) updates.gst_on_bill = flag(req.body.gst_on_bill);
+    if (updates.gst_enabled === 0) updates.gst_on_bill = 0;
 
     if (req.body.table_count !== undefined) {
       const tCount = Number(req.body.table_count);

@@ -1,9 +1,13 @@
 import express from 'express';
 import { createSubscription, createPaymentOrder, getUserSubscriptions, getAllSubscriptions, claimOnboardingReward, consumePrint } from '../controllers/subscriptionController.js';
+import { getPublicPlans } from '../controllers/planController.js';
 import { optionalAuth, authMiddleware } from '../middleware/auth.js';
 import { adminAuthMiddleware } from '../middleware/adminAuth.js';
 
 const router = express.Router();
+
+// Public plans endpoint (returns active time-based and print-based plans)
+router.get('/plans', getPublicPlans);
 
 // Claim 10 free prints onboarding reward (one-time duplicate-safe)
 router.post('/claim-onboarding-reward', authMiddleware, claimOnboardingReward);
