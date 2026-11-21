@@ -3,7 +3,8 @@
 //   FIREBASE_SERVICE_ACCOUNT        the service-account JSON (as is, or base64 encoded)
 //   GOOGLE_APPLICATION_CREDENTIALS  path to the service-account JSON file
 // Without it nothing is sent and isPushConfigured() is false; the rest of the app works as usual.
-import admin from 'firebase-admin';
+import { initializeApp, getApps, cert, applicationDefault } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 
 let messaging = null;
 let initTried = false;
@@ -18,16 +19,16 @@ function init() {
             const text = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
             const account = JSON.parse(text);
             if (account.private_key) account.private_key = account.private_key.replace(/\\n/g, '\n');
-            credential = admin.credential.cert(account);
+            credential = cert(account);
         } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-            credential = admin.credential.applicationDefault();
+            credential = applicationDefault();
         }
         if (!credential) {
             console.log('🔕 Push notifications off: FIREBASE_SERVICE_ACCOUNT is not set');
             return null;
         }
-        const app = admin.apps.length ? admin.app() : admin.initializeApp({ credential });
-        messaging = admin.messaging(app);
+        const app = getApps().length ? getApps()[0] : initializeApp({ credential });
+        messaging = getMessaging(app);
         console.log('🔔 Push notifications ready (Firebase Cloud Messaging)');
     } catch (err) {
         console.warn('⚠️ Push notifications off: could not read the Firebase service account:', err.message);
