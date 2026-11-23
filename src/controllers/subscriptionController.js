@@ -77,9 +77,11 @@ export const createSubscription = async (req, res, next) => {
     const planId = req.body?.plan_id;
     let prints = Number(prints_count) || 0;
     let price = null;
+    // Also read further down, when the subscription is saved
+    let pRows = null;
 
     if (planId || plan_name) {
-      const pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', plan_name || '', 'active']);
+      pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', plan_name || '', 'active']);
       if (pRows && pRows.length > 0) {
         price = Math.round(Number(pRows[0].price));
         if (!prints && pRows[0].prints_count) {
@@ -105,7 +107,7 @@ export const createSubscription = async (req, res, next) => {
     }
 
     if (confirming.has(paymentId)) {
-      return res.status(409).json({ detail: 'This payment has already been used.' });
+      return res.status(409).json({ detail: 'This payment has already been used.', code: 'PAYMENT_IN_PROGRESS' });
     }
     confirming.add(paymentId);
     lockedPaymentId = paymentId;
@@ -113,7 +115,7 @@ export const createSubscription = async (req, res, next) => {
     // One payment can only ever buy one pack
     const used = await query('SELECT id FROM subscriptions WHERE payment_id = ? LIMIT 1', [paymentId]);
     if (used && used.length > 0) {
-      return res.status(409).json({ detail: 'This payment has already been used.' });
+      return res.status(409).json({ detail: 'This payment has already been used.', code: 'PAYMENT_USED' });
     }
 
     if (unverifiedPaymentsAllowed() && !paymentsConfigured()) {
@@ -156,7 +158,7 @@ export const createSubscription = async (req, res, next) => {
     } catch (createErr) {
       // The database refuses a second record for the same payment id
       if (createErr?.code === 'ER_DUP_ENTRY' || createErr?.code === '23505') {
-        return res.status(409).json({ detail: 'This payment has already been used.' });
+        return res.status(409).json({ detail: 'This payment has already been used.', code: 'PAYMENT_USED' });
       }
       throw createErr;
     }
