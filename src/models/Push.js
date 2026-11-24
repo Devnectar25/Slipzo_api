@@ -9,10 +9,22 @@ const now = () => new Date().toISOString();
  * (so a reminder goes out only once), and the messages the platform admin sent.
  */
 export default class Push {
+    /** Phones where nobody is signed in: they get announcements to everyone, nothing personal */
+    static ANONYMOUS = 'anonymous';
+
     /** Saves this phone's FCM token for the signed-in user (a token moves to the newest account using it) */
     static async registerToken(userId, token, platform = 'android') {
         const clean = String(token || '').trim();
         if (!clean || clean.length > 4096) return false;
+        // a request without a session (it ended, or is still starting) must not take the phone away from its account;
+        // signing out does that itself (removeToken)
+        if (userId === Push.ANONYMOUS) {
+            const owned = await queryOne('SELECT id FROM push_tokens WHERE token = ?', [clean]);
+            if (owned) {
+                await query('UPDATE push_tokens SET updated_at = ? WHERE id = ?', [now(), owned.id]);
+                return true;
+            }
+        }
         await query('DELETE FROM push_tokens WHERE token = ? AND user_id <> ?', [clean, userId]).catch(() => null);
         const existing = await queryOne('SELECT id FROM push_tokens WHERE token = ? AND user_id = ?', [clean, userId]);
         if (existing) {
@@ -83,7 +95,7 @@ export default class Push {
         // without Firebase it is still saved: users see it in the app's notification bell
         const res = isPushConfigured()
             ? await sendPush(rows.map((r) => r.token), { title, body, data })
-            : { sent: 0, failed: 0, deadTokens: [] };
+            : { sent: 0, failed: 0, deadTokens: [], reasons: {} };
         if (res.deadTokens.length) await Push.removeTokens(res.deadTokens);
         const record = {
             id: uuidv4(),
@@ -99,7 +111,7 @@ export default class Push {
             created_at: now()
         };
         await insert('push_messages', record).catch((err) => console.warn('⚠️ Could not save push message:', err.message));
-        return { ...record, configured: isPushConfigured() };
+        return { ...record, configured: isPushConfigured(), phones: new Set(rows.map((r) => r.token)).size, reasons: res.reasons || {} };
     }
 
     static async listMessages(limit = 50) {

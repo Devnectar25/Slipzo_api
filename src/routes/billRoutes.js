@@ -1,5 +1,5 @@
 import express from 'express';
-import { getBills, createBill, getBill, updateBill, getBillStats, getTodayAnalytics, deleteBill, markBillAsPrinted, markTableBillsAsPrinted } from '../controllers/billController.js';
+import { getBills, createBill, getBill, updateBill, getBillStats, getTodayAnalytics, deleteBill, markBillAsPrinted, markTableBillsAsPrinted, claimPrint, releasePrint } from '../controllers/billController.js';
 import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -9,6 +9,8 @@ router.get('/', getBills);
 router.post('/', createBill);
 router.get('/stats', getBillStats);
 router.get('/analytics/today', getTodayAnalytics);
+router.post('/print-claim', claimPrint);
+router.post('/print-release', releasePrint);
 router.post('/print-table/:tableNumber', markTableBillsAsPrinted);
 router.post('/:id/print', markBillAsPrinted);
 router.get('/:id', getBill);

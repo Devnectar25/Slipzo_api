@@ -126,36 +126,38 @@ class Subscription {
     }
 
     try {
-      // 1. Check user record for onboarding reward and prints_used
-      const userRows = await query(
+      // The three questions do not depend on each other: asked at once, one wait instead of three
+      const [userRows, subRows, timeSubs] = await Promise.all([
+        query(
         `SELECT onboarding_reward_claimed, prints_used FROM users WHERE id = ?`,
         [userId]
-      ).catch(() => []);
+      ),
+        query(
+        `SELECT SUM(prints_count) as total_purchased, MAX(plan_name) as latest_plan 
+         FROM subscriptions 
+         WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)`,
+        [userId]
+      ),
+        query(
+        `SELECT * FROM subscriptions 
+         WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)
+         AND (plan_type = 'time' OR plan_name LIKE '%Month%' OR plan_name LIKE '%Year%')
+         ORDER BY created_at DESC LIMIT 5`,
+        [userId]
+      )
+      ]);
+
+      // 1. Check user record for onboarding reward and prints_used
       const onboardingValue = Number(userRows[0]?.onboarding_reward_claimed || 0);
       const onboardingDone = onboardingValue >= 1;
       const rewardClaimed = onboardingValue === 1;
       const usedPrints = Math.max(0, Number(userRows[0]?.prints_used || 0));
 
       // 2. Get total purchased prints from subscriptions table
-      const subRows = await query(
-        `SELECT SUM(prints_count) as total_purchased, MAX(plan_name) as latest_plan 
-         FROM subscriptions 
-         WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)`,
-        [userId]
-      ).catch(() => []);
-
       const purchasedPrints = Number(subRows[0]?.total_purchased || 0);
       const latestPlan = subRows[0]?.latest_plan || null;
 
       // 3. Check for Time-based subscriptions and calculate expiry
-      const timeSubs = await query(
-        `SELECT * FROM subscriptions 
-         WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)
-         AND (plan_type = 'time' OR plan_name LIKE '%Month%' OR plan_name LIKE '%Year%')
-         ORDER BY created_at DESC LIMIT 5`,
-        [userId]
-      ).catch(() => []);
-
       let hasActiveTimePlan = false;
       let expiresAt = null;
       let daysRemaining = null;
@@ -222,22 +224,9 @@ class Subscription {
         hasActiveTimePlan
       };
     } catch (err) {
-      console.error('Error computing quota for user:', userId, err);
-      return {
-        totalPrints: 10,
-        usedPrints: 0,
-        printsRemaining: 10,
-        availablePrints: 10,
-        isFreeTier: true,
-        activePlanName: 'Free Starter Tier',
-        onboardingRewardClaimed: false,
-        planType: 'print',
-        expiresAt: null,
-        daysRemaining: null,
-        isExpiringSoon: false,
-        isExpired: false,
-        hasActiveTimePlan: false
-      };
+      // no made-up numbers: a wrong balance would be shown on every device, or stop a shop that has paid from printing
+      console.error('Error computing quota for user:', userId, err.message);
+      throw err;
     }
   }
 }

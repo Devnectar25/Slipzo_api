@@ -41,8 +41,21 @@ const toPublic = (row) => ({
 
 export default class ShopStaff {
     static async listForOwner(ownerId) {
-        const rows = await query('SELECT * FROM shop_staff WHERE owner_user_id = ? ORDER BY created_at DESC', [ownerId]);
-        return (rows || []).map(toPublic);
+        const rows = await query(`
+            SELECT s.*, 
+                   COALESCE(u.name, u2.name) AS worker_name, 
+                   COALESCE(u.phone, u2.phone) AS worker_phone
+            FROM shop_staff s
+            LEFT JOIN users u ON u.id = s.worker_user_id
+            LEFT JOIN users u2 ON LOWER(u2.email) = LOWER(s.email)
+            WHERE s.owner_user_id = ?
+            ORDER BY s.created_at DESC
+        `, [ownerId]);
+        return (rows || []).map((row) => ({
+            ...toPublic(row),
+            name: row.worker_name || null,
+            phone: row.worker_phone || phoneFromEmail(row.email)
+        }));
     }
 
     static async findForOwner(id, ownerId) {

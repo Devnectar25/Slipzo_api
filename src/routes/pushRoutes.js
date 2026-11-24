@@ -1,16 +1,24 @@
 import express from 'express';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuth } from '../middleware/auth.js';
 import Push from '../models/Push.js';
 import { runPlanReminders } from '../services/planReminders.js';
 
 const router = express.Router();
 
-/** POST /api/push/register { token, platform } - the app saves this phone's push token after sign in */
-router.post('/register', authMiddleware, async (req, res, next) => {
+// The person who is signed in: a worker's phone is kept under the worker, not under the shop owner they work for
+const ownId = (req) => req.authUser?.id || req.user?.id || null;
+
+/**
+ * POST /api/push/register { token, platform } - saves this phone's push token, for the account that is signed in or,
+ * before sign in, without one. The account comes from the session only: an id in the request would let anybody
+ * receive another shop's notifications.
+ */
+router.post('/register', optionalAuth, async (req, res, next) => {
     try {
-        const ok = await Push.registerToken(req.user.id, req.body?.token, req.body?.platform);
+        const userId = ownId(req) || Push.ANONYMOUS;
+        const ok = await Push.registerToken(userId, req.body?.token, req.body?.platform);
         if (!ok) return res.status(400).json({ detail: 'Missing push token' });
-        res.json({ ok: true });
+        res.json({ ok: true, account: userId !== Push.ANONYMOUS });
     } catch (err) {
         next(err);
     }
@@ -19,7 +27,7 @@ router.post('/register', authMiddleware, async (req, res, next) => {
 /** POST /api/push/unregister { token } - on sign out, this phone stops getting this account's notifications */
 router.post('/unregister', authMiddleware, async (req, res, next) => {
     try {
-        await Push.removeToken(req.user.id, req.body?.token);
+        await Push.removeToken(ownId(req), req.body?.token);
         res.json({ ok: true });
     } catch (err) {
         next(err);
@@ -36,7 +44,7 @@ router.get('/cron/plan-reminders', async (req, res, next) => {
         if (!secret || req.get('authorization') !== `Bearer ${secret}`) {
             return res.status(401).json({ detail: 'Not allowed' });
         }
-        res.json(await runPlanReminders());
+        res.json(await runPlanReminders({ notices: true }));
     } catch (err) {
         next(err);
     }

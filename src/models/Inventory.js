@@ -98,6 +98,13 @@ export default class Inventory {
         }
     }
 
+    /** What printing these items takes out of stock: [{ id, name, qty, text }] (tracked items only) */
+    static async needsFor(userId, items) {
+        const totals = await trackedTotals(userId, items);
+        return [...totals].filter(([, { qty }]) => qty > 0)
+            .map(([id, { item, qty }]) => ({ id, name: item.name, qty: round3(qty), text: (n) => qtyText(n, item.unit) }));
+    }
+
     /** Manual stock change from the Menu page: { change: +5 / -2 } or { set: 40 } */
     static async adjust(userId, itemId, { change, set, reason, note } = {}) {
         const item = await UserMenuItem.findByIdAndUser(itemId, userId);
@@ -181,11 +188,13 @@ export default class Inventory {
             [userId, billId]
         ).catch(() => []);
         for (const r of rows || []) {
+            // the movement is removed first: when two devices do this at once, only the one that removed it puts the stock back
+            const gone = await query('DELETE FROM stock_movements WHERE id = ? AND user_id = ?', [r.id, userId]);
+            if (!Number(gone?.affectedRows || 0)) continue;
             await query(
                 'UPDATE user_menu_items SET stock_qty = COALESCE(stock_qty, 0) - ?, updated_at = ? WHERE id = ? AND user_id = ?',
                 [Number(r.change), new Date().toISOString(), r.user_menu_item_id, userId]
             );
-            await query('DELETE FROM stock_movements WHERE id = ? AND user_id = ?', [r.id, userId]);
         }
     }
 }

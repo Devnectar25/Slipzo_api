@@ -1,4 +1,7 @@
 import Subscription from '../models/Subscription.js';
+import PrintLedger, { cleanPrintId } from '../models/PrintLedger.js';
+import { v4 as uuidv4 } from 'uuid';
+import PrintLock, { billKey, cleanHolder } from '../models/PrintLock.js';
 import { query } from '../config/database.js';
 import { priceForPrints, MIN_PRINTS, MAX_PRINTS } from '../utils/pricing.js';
 import { verifyPayment, paymentsConfigured, unverifiedPaymentsAllowed, createOrder } from '../utils/razorpay.js';
@@ -185,9 +188,12 @@ export const getUserSubscriptions = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ detail: 'Authentication required' });
     }
-    const subscriptions = await Subscription.findByUserId(userId);
-    const quota = await Subscription.getQuotaByUserId(userId);
-    res.json({ subscriptions, quota });
+    const [subscriptions, quota] = await Promise.all([
+      Subscription.findByUserId(userId),
+      Subscription.getQuotaByUserId(userId)
+    ]);
+    // acting_shop: whose data this account works on right now (a worker: the owner's), so the app notices a change
+    res.json({ subscriptions, quota, acting_shop: userId });
   } catch (err) {
     next(err);
   }
@@ -265,7 +271,9 @@ export const consumePrint = async (req, res, next) => {
     }
 
     const currentQuota = await Subscription.getQuotaByUserId(userId);
-    if (currentQuota.printsRemaining <= 0) {
+    // late: this print already came out, but its report could not reach the server then. It is counted either way.
+    const late = req.body?.late === true;
+    if (currentQuota.printsRemaining <= 0 && !late && !cleanPrintId(req.body?.print_id)) {
       return res.status(403).json({
         error: 'QUOTA_EXHAUSTED',
         detail: 'No prints available in your print quota. Please purchase a plan to continue printing.',
@@ -273,23 +281,35 @@ export const consumePrint = async (req, res, next) => {
       });
     }
 
-    // Atomically increment prints_used in users table
-    await query(
-      'UPDATE users SET prints_used = COALESCE(prints_used, 0) + 1 WHERE id = ?',
-      [userId]
-    );
+    // Counted on the shop, whoever of its people printed; a print reported twice is counted once
+    const result = await PrintLedger.countOnce(userId, {
+      printId: cleanPrintId(req.body?.print_id) || uuidv4(),
+      workerId: req.authUser?.id,
+      billId: req.body?.bill_id,
+      device: req.body?.device,
+      limit: currentQuota.hasActiveTimePlan || late ? null : Number(currentQuota.totalPrints) || 0
+    });
+    if (result === 'refused') {
+      const quota = await Subscription.getQuotaByUserId(userId);
+      return res.status(403).json({
+        error: 'QUOTA_EXHAUSTED',
+        code: 'QUOTA_EXHAUSTED',
+        detail: 'No prints available in your print quota. Please purchase a plan to continue printing.',
+        quota
+      });
+    }
+    const holder = cleanHolder(req.body?.holder);
+    if (holder && req.body?.bill_id) await PrintLock.creditUsed(userId, billKey(req.body.bill_id), holder);
 
-    const updatedQuota = {
-      ...currentQuota,
-      usedPrints: (Number(currentQuota.usedPrints) || 0) + 1,
-      printsRemaining: Math.max(0, (Number(currentQuota.printsRemaining) || 0) - 1),
-      availablePrints: Math.max(0, (Number(currentQuota.availablePrints) || 0) - 1)
-    };
+    // read back, so the count includes what other devices used meanwhile
+    const updatedQuota = await Subscription.getQuotaByUserId(userId);
     console.log(`🖨️ Print credit consumed: User [${userId}] | Remaining: ${updatedQuota.printsRemaining} | Used: ${updatedQuota.usedPrints}`);
 
     return res.status(200).json({
       success: true,
       message: 'Print credit consumed successfully',
+      // the app may send the same print again when the answer gets lost: it is counted once
+      counted_once: true,
       quota: updatedQuota
     });
   } catch (err) {

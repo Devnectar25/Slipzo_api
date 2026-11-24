@@ -33,17 +33,25 @@ export const clearStaffCache = (userId) => {
     else staffCache.clear();
 };
 
-const getCachedMembership = async (userId) => {
+const STAFF_LAST_KNOWN = 10 * 60 * 1000;
+const getCachedMembership = async (userId, { fresh = false } = {}) => {
     const cached = staffCache.get(userId);
-    if (cached && (Date.now() - cached.timestamp < STAFF_CACHE_TTL)) {
+    if (!fresh && cached && (Date.now() - cached.timestamp < STAFF_CACHE_TTL)) {
         return cached.membership;
     }
-    // Runs on every request: a problem here must mean "no staff access", never "nobody can log in"
     let membership = null;
     try {
         membership = await ShopStaff.findActiveByWorker(userId);
     } catch (err) {
         console.error('⚠️ Staff membership lookup failed:', err.message);
+        // No such table: this database has no workers at all. Any other problem must never turn a worker into "the owner
+        // of their own shop": their bills and prints would land on the wrong account. The last known answer is used, or
+        // the request is refused so the app tries again.
+        const noStaffTable = err.code === '42P01' || /no such table/i.test(err.message || '');
+        if (!noStaffTable) {
+            if (cached && Date.now() - cached.timestamp < STAFF_LAST_KNOWN) return cached.membership;
+            throw err;
+        }
     }
     staffCache.set(userId, { membership, timestamp: Date.now() });
     return membership;
@@ -55,7 +63,7 @@ export const getStaffContext = async (userId) => {
     if (!membership) return null;
     const owner = await getCachedUser(membership.owner_user_id);
     if (!owner) return null;
-    return { shop_name: owner.shop?.name || owner.name || 'Shop' };
+    return { shop_name: owner.shop?.name || owner.name || 'Shop', shop_id: owner.id };
 };
 
 // Everything a worker may change: billing work only. Anything not listed is refused,
@@ -65,12 +73,15 @@ const STAFF_ALLOWED_WRITES = [
     /^PUT \/api\/bills\/[^/]+$/,
     /^POST \/api\/bills\/[^/]+\/print$/,
     /^POST \/api\/bills\/print-table\/[^/]+$/,
+    /^POST \/api\/bills\/print-(claim|release)$/,
     /^POST \/api\/subscriptions\/consume-print$/,
     /^POST \/api\/customers$/,
     /^PUT \/api\/customers\/[^/]+$/,
     /^PUT \/api\/(restaurant|tables)(\/tables)?\/[^/]+$/,
     /^POST \/api\/(restaurant|tables)(\/tables)?\/reset\/[^/]+$/,
-    /^POST \/api\/shop\/staff\/leave$/
+    /^POST \/api\/shop\/staff\/leave$/,
+    /^POST \/api\/push\/(register|unregister)$/,
+    /^POST \/api\/notifications\/read$/
 ];
 
 const isAllowedForStaff = (req) => {
@@ -85,13 +96,29 @@ const isAllowedForStaff = (req) => {
  * req.authUser always holds the person who is actually logged in.
  * Returns false if a response was already sent.
  */
+const shopOwnerFor = async (user, options) => {
+    const membership = await getCachedMembership(user.id, options);
+    return membership ? await getCachedUser(membership.owner_user_id) : null;
+};
+
 const applyIdentity = async (req, res, user) => {
     req.user = user;
     req.authUser = user;
-    const membership = await getCachedMembership(user.id);
-    if (!membership) return true;
+    const path = req.originalUrl.split('?')[0].replace(/\/+$/, '');
+    // "who am I" is always asked fresh: the app decides by it which shop's data it shows
+    let owner = await shopOwnerFor(user, { fresh: path === '/api/auth/me' });
 
-    const owner = await getCachedUser(membership.owner_user_id);
+    // The app says which shop it is billing for. A worker who was removed (or joined another shop) while a bill was open
+    // must not save that bill on the wrong account.
+    const expected = req.body && typeof req.body === 'object' ? req.body.acting_shop : undefined;
+    if (expected !== undefined) {
+        delete req.body.acting_shop;
+        if (String(expected) !== String((owner || user).id)) owner = await shopOwnerFor(user, { fresh: true });
+        if (String(expected) !== String((owner || user).id)) {
+            res.status(409).json({ code: 'SHOP_CHANGED', detail: 'Your shop access has changed. Please check the shop name and try again.' });
+            return false;
+        }
+    }
     if (!owner) return true;
 
     if (!isAllowedForStaff(req)) {
@@ -99,7 +126,7 @@ const applyIdentity = async (req, res, user) => {
         return false;
     }
     req.user = owner;
-    req.staffOf = { shop_name: owner.shop?.name || owner.name || 'Shop' };
+    req.staffOf = { shop_name: owner.shop?.name || owner.name || 'Shop', shop_id: owner.id };
     return true;
 };
 
@@ -134,15 +161,22 @@ export const authMiddleware = async (req, res, next) => {
         return res.status(401).json({ detail: 'Invalid or expired token' });
     }
     
-    const user = await getCachedUser(decoded.userId);
-    if (!user) {
-        return res.status(401).json({ detail: 'User not found' });
+    let allowed = false;
+    try {
+        const user = await getCachedUser(decoded.userId);
+        if (!user) {
+            return res.status(401).json({ detail: 'User not found' });
+        }
+        if (signedInBeforePasswordChange(decoded, user)) {
+            return res.status(401).json({ detail: 'Your password was changed. Please sign in again.', code: 'PASSWORD_CHANGED' });
+        }
+        allowed = await applyIdentity(req, res, user);
+    } catch (err) {
+        // the account could not be read right now: nothing is done rather than something on the wrong account
+        console.error('⚠️ Could not check the account:', err.message);
+        return res.status(503).json({ code: 'TRY_AGAIN', detail: 'The server is busy. Please try again.' });
     }
-    if (signedInBeforePasswordChange(decoded, user)) {
-        return res.status(401).json({ detail: 'Your password was changed. Please sign in again.', code: 'PASSWORD_CHANGED' });
-    }
-    
-    if (await applyIdentity(req, res, user)) next();
+    if (allowed) next();
 };
 
 export const optionalAuth = async (req, res, next) => {

@@ -4,6 +4,7 @@ import { normalizeGstRate } from '../utils/gst.js';
 import { query, queryOne, insert, beginTransaction } from '../config/database.js';
 import { generateBillNumber, calculateBillTotals } from '../utils/helpers.js';
 import RestaurantTable from './RestaurantTable.js';
+import TableBill from './TableBill.js';
 
 export default class Bill {
     constructor(data) {
@@ -58,32 +59,34 @@ export default class Bill {
             billNumber = generateBillNumber(prefix, currentSeq, format);
         }
 
-        // Make sure the number is free in both tables. Only the next few candidate numbers are looked up
-        // (indexed on user_id + number), instead of downloading every number the shop has ever used, which
-        // made each new bill slower as the shop's history grew. The unique index plus the retry loop below
-        // still catch a number taken by a bill saved at the same moment.
+        // Picks a number that is free in both tables. Runs inside the bill's transaction, after the shop's row is
+        // locked, so two devices saving at the same moment get their numbers one after the other: never the same
+        // number, and no gaps. Only the next few candidates are looked up (indexed on user_id + number).
         const BATCH = 25;
-        for (let round = 0; round < 40; round++) {
-            const candidates = [billNumber];
-            for (let i = 1; i < BATCH; i++) candidates.push(generateBillNumber(prefix, currentSeq + i, format));
-            const marks = candidates.map(() => '?').join(', ');
-            const rows = await query(
-                `SELECT number FROM saved_bills WHERE user_id = ? AND number IN (${marks})
-                 UNION ALL
-                 SELECT number FROM print_bills WHERE user_id = ? AND number IN (${marks})`,
-                [billData.user_id, ...candidates, billData.user_id, ...candidates]
-            ).catch(() => null);
-            if (!rows) break; // lookup failed: the insert retry below handles a clash
-            const taken = new Set(rows.map((r) => r.number));
-            const free = candidates.findIndex((n) => !taken.has(n));
-            if (free >= 0) {
-                currentSeq += free;
-                billNumber = candidates[free];
-                break;
+        const pickNumber = async (connection, shopSeq) => {
+            let seq = shopSeq;
+            const asked = billNumber;
+            for (let round = 0; round < 40; round++) {
+                const next = Array.from({ length: BATCH }, (_, i) => ({ number: generateBillNumber(prefix, seq + i, format), seq: seq + i }));
+                // the number the device showed is kept when it is still free
+                const candidates = round === 0 && asked
+                    ? [next.find((c) => c.number === asked) || { number: asked, seq: shopSeq }, ...next.filter((c) => c.number !== asked)]
+                    : next;
+                const marks = candidates.map(() => '?').join(', ');
+                const numbers = candidates.map((c) => c.number);
+                const rows = await connection.query(
+                    `SELECT number FROM saved_bills WHERE user_id = ? AND number IN (${marks})
+                     UNION ALL
+                     SELECT number FROM print_bills WHERE user_id = ? AND number IN (${marks})`,
+                    [billData.user_id, ...numbers, billData.user_id, ...numbers]
+                );
+                const taken = new Set((rows || []).map((r) => r.number));
+                const free = candidates.find((c) => !taken.has(c.number));
+                if (free) return free;
+                seq += BATCH;
             }
-            currentSeq += BATCH;
-            billNumber = generateBillNumber(prefix, currentSeq, format);
-        }
+            return { number: generateBillNumber(prefix, seq, format), seq };
+        };
 
         let insertedBill = null;
         let retryCount = 0;
@@ -93,6 +96,14 @@ export default class Bill {
             const connection = await beginTransaction();
 
             try {
+                // row lock on the shop: bills of one shop are numbered one after the other, whichever device they come from
+                await connection.query('UPDATE shops SET invoice_sequence = invoice_sequence WHERE user_id = ?', [billData.user_id]);
+                const shopRows = await connection.query('SELECT invoice_sequence FROM shops WHERE user_id = ?', [billData.user_id]);
+                const shopSeq = Math.max(Number(shopRows[0]?.invoice_sequence) || 1001, retryCount > 1 ? currentSeq : 0);
+                const picked = await pickNumber(connection, shopSeq);
+                currentSeq = picked.seq;
+                billNumber = picked.number;
+
                 const isSaved = billData.is_saved !== undefined ? Boolean(billData.is_saved) : false;
 
                 // Atomic print quota verification inside transaction (only for printed bills, saving drafts does not consume print quota)
@@ -174,7 +185,7 @@ export default class Bill {
                 }
 
                 // Increment shop's invoice sequence safely
-                const nextShopSeq = Math.max((Number(shopInfo.invoice_sequence) || 1000) + 1, currentSeq + 1);
+                const nextShopSeq = Math.max(shopSeq, currentSeq) + 1;
                 await connection.query(
                     `UPDATE shops SET invoice_sequence = ? WHERE user_id = ?`,
                     [nextShopSeq, billData.user_id]
@@ -204,7 +215,7 @@ export default class Bill {
 
                 if (isDupNumber && retryCount < 25) {
                     currentSeq++;
-                    billNumber = generateBillNumber(prefix, currentSeq, format);
+                    billNumber = '';
                     continue;
                 }
                 throw err;
@@ -237,6 +248,7 @@ export default class Bill {
     static async findByIdAndUser(id, userId) {
         let billData = await queryOne('SELECT * FROM saved_bills WHERE id = ? AND user_id = ?', [id, userId]);
         let itemsTable = 'saved_bill_items';
+        const isSaved = billData ? 1 : 0; // saved = not printed yet
 
         if (!billData) {
             billData = await queryOne('SELECT * FROM print_bills WHERE id = ? AND user_id = ?', [id, userId]);
@@ -251,7 +263,7 @@ export default class Bill {
         if (!billData) return null;
 
         const items = await query(`SELECT * FROM ${itemsTable} WHERE bill_id = ?`, [id]);
-        return new Bill({ ...billData, items });
+        return new Bill({ ...billData, items, ...(itemsTable === 'bill_items' ? {} : { is_saved: isSaved }) });
     }
 
     static async findByUserId(userId, options = {}) {
@@ -332,20 +344,31 @@ export default class Bill {
 
         // If pagination options are provided
         if (page !== undefined && limit !== undefined) {
-            const countResult = await queryOne(`SELECT COUNT(*) as total ${baseSql}`, params);
-            const total = Number(countResult?.total || 0);
-
             // page=abc, limit=-5 or limit=1000000 must not reach the database as they are
             const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 20));
             const safePage = Math.max(1, parseInt(page, 10) || 1);
             const offset = (safePage - 1) * safeLimit;
             const queryParams = [...params, safeLimit, offset];
-            const bills = await query(
-                `SELECT * ${baseSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-                queryParams
-            );
+            const pageSql = `${baseSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+            // one list (saved or printed): its count, its bills and their items are read at the same time, one wait
+            // instead of three
+            const itemsTable = itemsFetchMode === 'saved' ? 'saved_bill_items' : itemsFetchMode === 'print' ? 'print_bill_items' : null;
+            const [countResult, bills, pageItems] = await Promise.all([
+                queryOne(`SELECT COUNT(*) as total ${baseSql}`, params),
+                query(`SELECT * ${pageSql}`, queryParams),
+                itemsTable
+                    ? query(`SELECT * FROM ${itemsTable} WHERE bill_id IN (SELECT id ${pageSql})`, queryParams).catch(() => null)
+                    : null
+            ]);
+            const total = Number(countResult?.total || 0);
 
-            await loadItemsForBills(bills);
+            if (pageItems) {
+                const byBill = new Map(bills.map((b) => [b.id, []]));
+                for (const item of pageItems) byBill.get(item.bill_id)?.push(item);
+                for (const b of bills) b.items = byBill.get(b.id);
+            } else {
+                await loadItemsForBills(bills);
+            }
 
             return {
                 bills: bills.map(b => new Bill(b)),
@@ -489,11 +512,28 @@ export default class Bill {
         };
     }
 
-    static async markAsPrinted(id, userId) {
+    /**
+     * The bill's table is cleared, unless it holds the order of another bill by now (new customers).
+     * late: the print was reported later, so the table is cleared only when its order is surely this bill.
+     */
+    static async clearTableOf(userId, tableIdentifier, billId, { late = false } = {}) {
+        const table = await RestaurantTable.find(userId, tableIdentifier);
+        if (!table) return;
+        const linked = await TableBill.linked(userId, table.id).catch(() => null);
+        if (linked ? linked !== billId : late) return;
+        await RestaurantTable.resetTable(userId, table.id);
+    }
+
+    static async markAsPrinted(id, userId, { late = false } = {}) {
         if (!id || !userId) return false;
         const connection = await beginTransaction();
         let tableToReset = null;
+        let moved = false;
         try {
+            // Two devices can report the same bill at the same moment: the second waits here for the first, then finds
+            // the bill already moved and changes nothing
+            await connection.query('UPDATE saved_bills SET number = number WHERE id = ? AND user_id = ?', [id, userId]);
+
             // Check if bill exists in saved_bills
             const savedRows = await connection.query(
                 'SELECT * FROM saved_bills WHERE id = ? AND user_id = ?',
@@ -511,6 +551,7 @@ export default class Bill {
                 );
 
                 if (!existingPrint || existingPrint.length === 0) {
+                    moved = true;
                     const keys = Object.keys(bill);
                     const values = Object.values(bill);
                     const placeholders = keys.map(() => '?').join(', ');
@@ -557,18 +598,25 @@ export default class Bill {
             // Reset table to AVAILABLE
             if (tableToReset) {
                 try {
-                    await RestaurantTable.resetTable(userId, tableToReset);
+                    await this.clearTableOf(userId, tableToReset, id, { late });
                 } catch (tErr) {
                     console.warn(`Could not reset table ${tableToReset} on bill print:`, tErr);
                 }
             }
 
-            return true;
+            // moved: this call is the one that turned the saved bill into a printed one
+            return { moved };
         } catch (err) {
             await connection.rollback();
             connection.release();
             throw err;
         }
+    }
+
+    /** The bill has been printed (it is no longer among the saved bills) */
+    static async isPrinted(id, userId) {
+        const row = await queryOne('SELECT id FROM print_bills WHERE id = ? AND user_id = ?', [id, userId]);
+        return Boolean(row);
     }
 
     static async markTableAsPrinted(tableIdentifier, userId) {
