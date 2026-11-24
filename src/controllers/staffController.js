@@ -43,6 +43,7 @@ export const inviteStaff = async (req, res, next) => {
         let account = null;
         let isNewUserCreated = false;
         let tempPassword = null;
+        let toCreate = null;
 
         if (entered.includes('@')) {
             email = entered.toLowerCase();
@@ -78,31 +79,11 @@ export const inviteStaff = async (req, res, next) => {
                         return res.status(400).json({ detail: 'Password must be at least 4 characters long.' });
                     }
 
-                    const newUser = await User.create({
-                        name: workerName,
-                        phone,
-                        password: workerPassword
-                    });
-
-                    // Create minimal default shop for new user so queries don't fail
-                    try {
-                        await Shop.create({
-                            user_id: newUser.id,
-                            name: `${workerName}'s Shop`
-                        });
-                    } catch (_) {}
-
-                    account = {
-                        id: newUser.id,
-                        email: newUser.email || phoneToEmail(phone),
-                        name: newUser.name,
-                        is_new: true,
-                        temp_password: workerPassword
-                    };
-                    isNewUserCreated = true;
-                    tempPassword = workerPassword;
+                    // created further down, after every check that can still refuse the worker
+                    toCreate = { name: workerName, phone, password: workerPassword };
                 } else {
-                    return res.status(200).json({
+                    // an error status: apps that do not know these fields took a 200 for "worker added"
+                    return res.status(404).json({
                         detail: `No Slipzo account found with this mobile number. You can register them as a new staff member now.`,
                         not_registered: true,
                         requires_registration: true,
@@ -111,10 +92,10 @@ export const inviteStaff = async (req, res, next) => {
                 }
             }
 
-            if (account.id === req.user.id || account.id === req.authUser?.id) {
+            if (account && (account.id === req.user.id || account.id === req.authUser?.id)) {
                 return res.status(400).json({ detail: `That is your own ${what}. Add your worker's ${what} instead.` });
             }
-            email = String(account.email || phoneToEmail(phone)).trim().toLowerCase();
+            email = String(account?.email || phoneToEmail(phone)).trim().toLowerCase();
         }
 
         if (email === String(req.user.email || '').toLowerCase()) {
@@ -129,6 +110,16 @@ export const inviteStaff = async (req, res, next) => {
             return res.status(400).json({ detail: `A shop can have up to ${MAX_STAFF_PER_SHOP} workers.` });
         }
 
+        if (toCreate) {
+            const newUser = await User.create(toCreate);
+            // Create minimal default shop for new user so queries don't fail
+            try {
+                await Shop.create({ user_id: newUser.id, name: `${toCreate.name}'s Shop` });
+            } catch (_) {}
+            account = { id: newUser.id, email: newUser.email || phoneToEmail(phone), name: newUser.name };
+            isNewUserCreated = true;
+            tempPassword = toCreate.password;
+        }
         const workerUserId = account.id;
 
         // Check if user is ALREADY staff of another shop OR owner of an active shop
@@ -201,7 +192,16 @@ export const inviteStaff = async (req, res, next) => {
             created_at: nowStr,
             accepted_at: nowStr
         };
-        await insert('shop_staff', row);
+        try {
+            await insert('shop_staff', row);
+        } catch (err) {
+            // not added after all: an account nobody was told about must not stay behind (its number would count as registered)
+            if (isNewUserCreated) {
+                await query('DELETE FROM shops WHERE user_id = ?', [workerUserId]).catch(() => {});
+                await query('DELETE FROM users WHERE id = ?', [workerUserId]).catch(() => {});
+            }
+            throw err;
+        }
         if (workerUserId) clearStaffCache(workerUserId);
 
         // Notify worker if already registered

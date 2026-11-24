@@ -98,38 +98,33 @@ class User {
     }
 
     /**
-     * The account behind a mobile number, for adding a worker. Finds:
-     *  1. accounts made with the mobile number (phone column / internal address), however the number was saved
-     *     ("+91 98765 43210", "09876543210", ...);
-     *  2. otherwise an email or Google account whose shop profile has this number, as long as only one account
-     *     has it (a shared shop number must not pick a random person).
-     * Returns { id, email } or null.
+     * The account a person signs in to with this mobile number, however the number was saved ("+91 98765 43210",
+     * "09876543210", ...). A number that is only written in some shop's profile is not a login: matching on it linked a
+     * stranger's account as the worker, and the worker could not sign in.
+     * Returns { id, email, name } or null.
      */
     static async findAccountForPhone(phone) {
         const digits = (col) => `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(${col}, ''), ' ', ''), '-', ''), '+', ''), '(', ''), ')', '')`;
         const variants = [phone, `91${phone}`, `0${phone}`];
 
         const own = await queryOne(
-            `SELECT id, email FROM users
+            `SELECT id, email, name FROM users
              WHERE LOWER(email) = ? OR phone = ? OR ${digits('phone')} IN (?, ?, ?)
              ORDER BY CASE WHEN LOWER(email) = ? THEN 0 ELSE 1 END
              LIMIT 1`,
             [phoneToEmail(phone), phone, ...variants, phoneToEmail(phone)]
         );
-        if (own) return own;
-
-        const viaShop = await query(
-            `SELECT u.id, u.email FROM shops s JOIN users u ON u.id = s.user_id
-             WHERE ${digits('s.phone')} IN (?, ?, ?)
-             LIMIT 2`,
-            variants
-        );
-        return viaShop && viaShop.length === 1 ? viaShop[0] : null;
+        return own || null;
     }
 
     static async findByPhone(phone) {
         try {
-            const data = await queryOne('SELECT * FROM users WHERE phone = ? OR email = ?', [phone, phoneToEmail(phone)]);
+            let data = await queryOne('SELECT * FROM users WHERE phone = ? OR email = ?', [phone, phoneToEmail(phone)]);
+            if (!data) {
+                // the number may be saved in another way (+91, spaces): the same person as when they are added as a worker
+                const account = await this.findAccountForPhone(phone);
+                data = account ? await queryOne('SELECT * FROM users WHERE id = ?', [account.id]) : null;
+            }
             if (!data) return null;
             const shop = await queryOne('SELECT * FROM shops WHERE user_id = ?', [data.id]);
             return new User({ ...data, shop });

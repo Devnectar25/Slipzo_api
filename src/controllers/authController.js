@@ -221,7 +221,8 @@ export const login = async (req, res, next) => {
         }
         if (!user) {
             console.log('❌ User not found');
-            return res.status(401).json({ detail: 'Invalid credentials' });
+            // sign up and forgot password already say this, so nothing is given away here
+            return res.status(401).json({ detail: 'No account found with this mobile number.', code: 'NO_ACCOUNT' });
         }
         console.log('✅ User found:', user.id);
 
@@ -229,7 +230,7 @@ export const login = async (req, res, next) => {
         const isValidPassword = await User.validatePassword(user, password);
         if (!isValidPassword) {
             console.log('❌ Invalid password for user:', user.id);
-            return res.status(401).json({ detail: 'Invalid credentials' });
+            return res.status(401).json({ detail: 'Wrong password. Check it and try again, or use Forgot password.', code: 'WRONG_PASSWORD' });
         }
         console.log('✅ Password validated');
 
