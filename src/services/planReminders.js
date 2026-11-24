@@ -27,13 +27,17 @@ export function reminderFor(quota) {
     return null;
 }
 
-export async function runPlanReminders() {
+// notices: also check each shop's other notices (stock running low); the daily cron does, at 9 in the morning
+export async function runPlanReminders({ notices = false } = {}) {
     if (!isPushConfigured()) return { checked: 0, sent: 0, skipped: 'push not configured' };
     const rows = await Push.allTokens();
-    const userIds = [...new Set(rows.map((r) => r.user_id))];
+    const userIds = [...new Set(rows.map((r) => r.user_id))].filter((id) => id !== Push.ANONYMOUS);
+    // loaded here because Notification uses reminderFor from this file
+    const Notification = notices ? (await import('../models/Notification.js')).default : null;
     let sent = 0;
     for (const userId of userIds) {
         try {
+            if (Notification) await Notification.refreshStatus(userId);
             const quota = await Subscription.getQuotaByUserId(userId);
             const r = reminderFor(quota);
             if (!r) continue;

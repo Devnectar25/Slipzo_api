@@ -15,12 +15,13 @@ export const getTables = async (req, res, next) => {
 export const updateTable = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { status, current_items, total_amount } = req.body;
+        const { status, current_items, total_amount, base_items } = req.body;
 
         const updated = await RestaurantTable.updateTable(req.user.id, id, {
             status,
             current_items,
-            total_amount
+            total_amount,
+            base_items
         });
 
         if (!updated) {

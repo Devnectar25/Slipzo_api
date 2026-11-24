@@ -5,6 +5,7 @@ import Shop from './Shop.js';
 import UserMenuItem from './UserMenuItem.js';
 import { isInventoryType } from './Inventory.js';
 import { reminderFor } from '../services/planReminders.js';
+import Push from './Push.js';
 
 /**
  * In-app notifications (the bell in the app header).
@@ -23,10 +24,14 @@ const toTime = (v) => {
 };
 
 export default class Notification {
-    /** Adds a notice for the user unless one with the same key already exists */
-    static async addOnce(userId, { kind, title, body, view = null, key }) {
+    /**
+     * Adds a notice for the user unless one with the same key already exists. A new notice is also sent to the user's
+     * phones, so it is seen when the app is closed (push: false keeps it in the bell only).
+     */
+    static async addOnce(userId, { kind, title, body, view = null, key, push = true }) {
         const exists = await queryOne('SELECT id FROM user_notifications WHERE user_id = ? AND dedupe_key = ?', [userId, key]).catch(() => null);
         if (exists) return false;
+        let added = true;
         await insert('user_notifications', {
             id: uuidv4(),
             user_id: userId,
@@ -36,14 +41,22 @@ export default class Notification {
             view,
             dedupe_key: key,
             created_at: new Date().toISOString()
-        }).catch(() => null); // a parallel request may have added it first (unique key)
-        return true;
+        }).catch(() => { added = false; }); // a parallel request may have added it first (unique key)
+        if (added && push) {
+            try {
+                // the same key as the daily plan reminders, so the phone rings once, whichever comes first
+                if (await Push.markOnce(userId, key)) await Push.sendToUser(userId, { title, body, data: { kind, ...(view ? { view } : {}) } });
+            } catch (err) {
+                console.warn('⚠️ Could not push a notice:', err.message);
+            }
+        }
+        return added;
     }
 
     /** Plan, prints, stock and UPI notices that apply right now (each kept once) */
-    static async refreshStatus(userId) {
+    static async refreshStatus(userId, { force = false } = {}) {
         const last = lastStatusCheck.get(userId) || 0;
-        if (Date.now() - last < STATUS_EVERY_MS) return;
+        if (!force && Date.now() - last < STATUS_EVERY_MS) return;
         lastStatusCheck.set(userId, Date.now());
 
         // plan ending / ended, prints low / used up (same wording as the push reminders)
@@ -64,7 +77,8 @@ export default class Notification {
                     title: 'Add your UPI ID',
                     body: 'UPI is on for your bills but no UPI ID is set, so customers cannot scan a payment QR. Add it in Shop profile.',
                     view: 'shop',
-                    key: 'upi_missing'
+                    key: 'upi_missing',
+                    push: false // a setup hint: not worth a sound on the phone
                 });
             }
             // stock running low (shops that keep stock), at most once a day
@@ -88,6 +102,14 @@ export default class Notification {
         } catch (err) {
             console.warn('⚠️ Shop notice:', err.message);
         }
+    }
+
+    /** After a sale: tells the shop at once when something just ran low (waits a moment at most) */
+    static async afterSale(userId) {
+        await Promise.race([
+            Notification.refreshStatus(userId, { force: true }),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+        ]).catch(() => {});
     }
 
     /** Newest first: { items: [{ id, kind, title, body, code, view, created_at, unread }], unread } */

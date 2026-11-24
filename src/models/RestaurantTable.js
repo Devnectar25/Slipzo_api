@@ -1,5 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
-import { query, queryOne, insert, update } from '../config/database.js';
+import { query, queryOne, insert, update, beginTransaction } from '../config/database.js';
+import { mergeOrders, sameOrder } from '../utils/orderMerge.js';
+import TableBill from './TableBill.js';
+
+const plainDigits = (text) => text.replace(/[०-९]/g, (d) => String('०१२३४५६७८९'.indexOf(d)));
+
+/** 5, "5", "table-5", "Table 5", "टेबल ५" → 5. Anything else → null: an unknown name must never mean table 1. */
+export const tableNumberOf = (identifier) => {
+    const text = plainDigits(String(identifier ?? '').trim());
+    if (/^\d+$/.test(text)) return Number(text) || null;
+    const match = text.match(/^(?:table|टेबल|मेज़?)[-_\s]*(\d+)$/i);
+    return match ? Number(match[1]) || null : null;
+};
 
 export default class RestaurantTable {
     constructor(data) {
@@ -56,40 +68,27 @@ export default class RestaurantTable {
         return rows.map(r => new RestaurantTable(r));
     }
 
+    /** The shop's table by id, number ("5", "Table 5", "टेबल ५") or its own name. null when there is none. */
+    static async find(userId, tableIdentifier) {
+        if (!userId || !tableIdentifier) return null;
+        const byId = await queryOne('SELECT * FROM restaurant_tables WHERE user_id = ? AND id = ?', [userId, String(tableIdentifier)]);
+        if (byId) return byId;
+        const byName = await queryOne('SELECT * FROM restaurant_tables WHERE user_id = ? AND name = ? ORDER BY table_number LIMIT 1', [userId, String(tableIdentifier).trim()]);
+        if (byName) return byName;
+        const num = tableNumberOf(tableIdentifier);
+        return num ? await queryOne('SELECT * FROM restaurant_tables WHERE user_id = ? AND table_number = ?', [userId, num]) : null;
+    }
+
     static async updateTable(userId, tableIdentifier, updates) {
         if (!userId || !tableIdentifier) return null;
 
-        // Try lookup by id first
-        let existing = await queryOne('SELECT * FROM restaurant_tables WHERE user_id = ? AND id = ?', [userId, String(tableIdentifier)]);
+        let existing = await this.find(userId, tableIdentifier);
 
-        // If not found, resolve table_number from identifier (e.g. 1, "1", "table-1", "table_1", "Table 1")
-        if (!existing) {
-            let num = null;
-            if (!isNaN(Number(tableIdentifier))) {
-                num = Number(tableIdentifier);
-            } else if (typeof tableIdentifier === 'string') {
-                const match = tableIdentifier.trim().match(/^table[-_\s]?(\d+)$/i);
-                if (match) {
-                    num = Number(match[1]);
-                }
-            }
-            if (num !== null) {
-                existing = await queryOne('SELECT * FROM restaurant_tables WHERE user_id = ? AND table_number = ?', [userId, num]);
-            }
-        }
-
-        // If table record doesn't exist yet for this user, auto-create it
-        if (!existing) {
-            let tableNum = 1;
-            if (!isNaN(Number(tableIdentifier))) {
-                tableNum = Number(tableIdentifier);
-            } else if (typeof tableIdentifier === 'string') {
-                const match = tableIdentifier.trim().match(/^table[-_\s]?(\d+)$/i);
-                if (match) tableNum = Number(match[1]);
-            }
-            const tableId = (String(tableIdentifier).length === 36 && String(tableIdentifier).includes('-')) ? tableIdentifier : uuidv4();
+        // a numbered table that does not exist yet for this user is created
+        const tableNum = tableNumberOf(tableIdentifier);
+        if (!existing && tableNum) {
             const newTable = {
-                id: tableId,
+                id: uuidv4(),
                 user_id: userId,
                 table_number: tableNum,
                 name: `Table ${tableNum}`,
@@ -114,6 +113,33 @@ export default class RestaurantTable {
             updated_at: new Date().toISOString()
         };
 
+        // The device says which order it started from (base_items): when another device changed the table meanwhile,
+        // both changes are kept instead of the last one winning
+        if (Array.isArray(updates.base_items) && Array.isArray(updates.current_items)) {
+            const tx = await beginTransaction();
+            try {
+                await tx.query('UPDATE restaurant_tables SET status = status WHERE id = ?', [existing.id]); // row lock
+                const [row] = await tx.query('SELECT * FROM restaurant_tables WHERE id = ?', [existing.id]);
+                const theirs = new RestaurantTable(row || existing).current_items;
+                const changedElsewhere = !sameOrder(updates.base_items, theirs);
+                const items = changedElsewhere ? mergeOrders(updates.base_items, updates.current_items, theirs) : updates.current_items;
+                const total = items.reduce((sum, it) => sum + (Number(it.quantity ?? it.qty) || 0) * (Number(it.rate ?? it.price) || 0), 0);
+                await tx.query(
+                    'UPDATE restaurant_tables SET status = ?, current_items = ?, total_amount = ?, updated_at = ? WHERE id = ?',
+                    [items.length ? 'OCCUPIED' : 'AVAILABLE', JSON.stringify(items), Math.round(total * 100) / 100, dataToUpdate.updated_at, existing.id]
+                );
+                await tx.commit();
+            } catch (err) {
+                await tx.rollback();
+                throw err;
+            } finally {
+                tx.release();
+            }
+            const merged = await queryOne('SELECT * FROM restaurant_tables WHERE id = ?', [existing.id]);
+            if (merged && new RestaurantTable(merged).current_items.length === 0) await TableBill.clear(userId, existing.id);
+            return merged ? new RestaurantTable(merged) : null;
+        }
+
         if (updates.status !== undefined) {
             dataToUpdate.status = String(updates.status).toUpperCase() === 'OCCUPIED' ? 'OCCUPIED' : 'AVAILABLE';
         }
@@ -133,6 +159,8 @@ export default class RestaurantTable {
         }
 
         await update('restaurant_tables', dataToUpdate, 'id = ?', [existing.id]);
+        // cleared: the order's bill belongs to the customers who left
+        if (dataToUpdate.status === 'AVAILABLE' || dataToUpdate.current_items === '[]') await TableBill.clear(userId, existing.id);
         const updated = await queryOne('SELECT * FROM restaurant_tables WHERE id = ?', [existing.id]);
         return updated ? new RestaurantTable(updated) : null;
     }
@@ -151,6 +179,7 @@ export default class RestaurantTable {
             "UPDATE restaurant_tables SET status = 'AVAILABLE', current_items = '[]', total_amount = 0.00, updated_at = ? WHERE user_id = ?",
             [new Date().toISOString(), userId]
         );
+        await TableBill.clear(userId);
         return await this.getTablesByUserId(userId);
     }
 
@@ -175,6 +204,7 @@ export default class RestaurantTable {
         const now = new Date().toISOString();
         for (const r of stale) {
             await update('restaurant_tables', { status: 'AVAILABLE', current_items: '[]', total_amount: 0.00, updated_at: now }, 'id = ?', [r.id]);
+            await TableBill.clear(userId, r.id);
         }
         return stale.length;
     }

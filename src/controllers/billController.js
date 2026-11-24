@@ -1,14 +1,48 @@
 import Bill from '../models/Bill.js';
-import { query } from '../config/database.js';
+import { query, beginTransaction } from '../config/database.js';
 import { normalizeUnit, roundQty } from '../utils/units.js';
 import { normalizeGstRate } from '../utils/gst.js';
 import Shop from '../models/Shop.js';
 import Template from '../models/Template.js';
 import Subscription from '../models/Subscription.js';
 import RestaurantTable from '../models/RestaurantTable.js';
+import TableBill from '../models/TableBill.js';
 import Inventory, { isInventoryType } from '../models/Inventory.js';
+import Notification from '../models/Notification.js';
+import PrintLock, { billKey, tableKey, cleanHolder } from '../models/PrintLock.js';
 
 const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
+
+// One thing at a time for a restaurant table (two phones saving the same order): the second waits for the first
+// Only a few at once: each keeps a database connection while its work needs another, and must never use them all up.
+const MAX_TABLE_LOCKS = 3;
+let tableLocks = 0;
+const tableQueue = [];
+const withTableLock = async (tableId, work) => {
+    if (tableLocks >= MAX_TABLE_LOCKS) await new Promise((resolve) => tableQueue.push(resolve));
+    else tableLocks++;
+    try {
+        return await lockTable(tableId, work);
+    } finally {
+        const next = tableQueue.shift();
+        if (next) next(); // takes this place over
+        else tableLocks--;
+    }
+};
+const lockTable = async (tableId, work) => {
+    const tx = await beginTransaction();
+    try {
+        await tx.query('UPDATE restaurant_tables SET status = status WHERE id = ?', [tableId]);
+        const result = await work();
+        await tx.commit();
+        return result;
+    } catch (err) {
+        await tx.rollback();
+        throw err;
+    } finally {
+        tx.release();
+    }
+};
 
 export const getBills = async (req, res, next) => {
     try {
@@ -123,7 +157,7 @@ export const createBill = async (req, res, next) => {
         }
 
         // Create bill with transaction
-        const bill = await Bill.create({
+        const newBill = {
             user_id: req.user.id,
             template_id: template.id,
             customer_id: customer_id || null,
@@ -142,7 +176,31 @@ export const createBill = async (req, res, next) => {
             template_width: template.width || template_width || '58mm',
             is_saved: is_saved,
             shop
-        });
+        };
+        // The order on a restaurant table is one bill, whoever of the shop saves or prints it
+        const orderTable = req.body.table_order === true && is_saved ? await RestaurantTable.find(req.user.id, newBill.table_number) : null;
+        const holder = cleanHolder(req.body.holder);
+        let bill = null;
+        if (orderTable) {
+            const outcome = await withTableLock(orderTable.id, async () => {
+                const openId = await TableBill.find(req.user.id, orderTable.id);
+                if (openId) {
+                    const busy = await PrintLock.busyElsewhere(req.user.id, billKey(openId), holder);
+                    if (busy) return { busy };
+                    // printed a moment ago elsewhere: it is no longer waiting, so this is a new bill
+                    if (!(await Bill.isPrinted(openId, req.user.id))) return { bill: await Bill.update(openId, req.user.id, newBill) };
+                }
+                const created = await Bill.create(newBill);
+                await TableBill.set(req.user.id, orderTable.id, created.id);
+                return { bill: created };
+            });
+            if (outcome.busy) {
+                return res.status(409).json({ code: 'PRINTING_ELSEWHERE', detail: 'This is being printed on another device right now. Please wait a moment.', device: outcome.busy.device || '' });
+            }
+            bill = outcome.bill;
+        } else {
+            bill = await Bill.create(newBill);
+        }
 
         // Only deduct stock if bill is directly printed (!is_saved).
         // Before printing the receipt, do NOT deduct the stock!
@@ -158,6 +216,7 @@ export const createBill = async (req, res, next) => {
 
         // Return bill object augmented with quota if print bill
         const responseData = typeof bill.toJSON === 'function' ? bill.toJSON() : { ...bill };
+        if (orderTable) responseData.table_linked = true;
         if (!is_saved) {
             responseData.quota = await Subscription.getQuotaByUserId(req.user.id).catch(() => null);
         }
@@ -216,8 +275,23 @@ export const updateBill = async (req, res, next) => {
             return { name, quantity: roundQty(quantity), rate, barcode: item.barcode || null, unit: normalizeUnit(item.unit), gst_rate: normalizeGstRate(item.gst_rate) };
         });
 
+        // The same bill can be open on another device: it must not change while that device prints it, nor after
+        // that device printed it (the paper would no longer match)
+        const holder = cleanHolder(req.body.holder);
+        const printedBefore = await Bill.isPrinted(id, req.user.id).catch(() => false);
+        if (holder) {
+            const lock = await PrintLock.info(req.user.id, billKey(id));
+            if (lock?.live && lock.holder !== holder) {
+                return res.status(409).json({ code: 'PRINTING_ELSEWHERE', detail: 'This is being printed on another device right now. Please wait a moment.', device: lock.device || '' });
+            }
+            if (printedBefore && req.body.is_saved && lock?.printed_at && lock.printed_holder !== holder) {
+                return res.status(409).json({ code: 'ALREADY_PRINTED', detail: 'This bill was already printed on another device, so it cannot be changed.', device: lock.printed_device || '', printed_at: lock.printed_at });
+            }
+        }
+        const shop = await Shop.findByUserId(req.user.id).catch(() => null);
+
         // what this bill already took out of stock counts as available again
-        await Inventory.checkBill(req.user.id, normalizedItems, id);
+        await Inventory.checkBill(req.user.id, normalizedItems, id, shop);
 
         const rawTableNum = table_number || table || table_name || '';
         const cleanTableNum = rawTableNum ? String(rawTableNum).trim() : null;
@@ -235,21 +309,78 @@ export const updateBill = async (req, res, next) => {
             items: normalizedItems
         });
 
-        const currentBill = await Bill.findByIdAndUser(id, req.user.id).catch(() => null);
-        const wasSaved = currentBill?.is_saved === 1 || currentBill?.is_saved === true;
-        // Only sync stock if the bill was ALREADY printed (is_saved === 0).
+        // the bill of the order on a table: the shop's other devices save and print this same bill
+        if (req.body.table_order === true && cleanTableNum && !printedBefore) {
+            const orderTable = await RestaurantTable.find(req.user.id, cleanTableNum);
+            if (orderTable) {
+                await TableBill.set(req.user.id, orderTable.id, id).catch((e) => console.warn('⚠️ Table bill:', e.message));
+                if (updated) updated.table_linked = true;
+            }
+        }
+
+        // Only sync stock if the bill was ALREADY printed.
         // If it's still a saved bill waiting to print, do NOT deduct stock before printing!
-        if (!wasSaved && isInventoryType(shop?.business_type)) {
-            await Inventory.syncBill(req.user.id, id, normalizedItems, updated?.number).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
+        if (printedBefore && isInventoryType(shop?.business_type)) {
+            await Inventory.syncBill(req.user.id, id, normalizedItems, updated?.number, shop).catch((e) => console.warn('⚠️ Stock update for bill:', e.message));
         }
 
         res.json(updated);
     } catch (err) {
         if (err.message && err.message.includes('not found')) {
-            return res.status(404).json({ detail: err.message });
+            return res.status(404).json({ detail: err.message, code: 'BILL_GONE' });
+        }
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ detail: err.message });
         }
         next(err);
     }
+};
+
+/**
+ * POST /bills/print-claim { holder, device, bill_id | table }
+ * Called by a device right before it prints. Refused (409 / 403) when another device is printing the same bill or
+ * table, when the last print credits are in use, or when the goods were just sold on another device.
+ */
+export const claimPrint = async (req, res, next) => {
+    try {
+        const holder = cleanHolder(req.body?.holder);
+        const { bill_id: billId, table } = req.body || {};
+        if (!holder || (!billId && !table)) return res.status(400).json({ detail: 'holder and bill_id or table are required' });
+        const device = req.body.device;
+
+        if (table) {
+            const result = await PrintLock.claim(req.user.id, tableKey(table), { holder, device });
+            return result.ok ? res.json({ ok: true }) : res.status(result.status).json(result.body);
+        }
+
+        const bill = await Bill.findByIdAndUser(billId, req.user.id);
+        if (!bill) return res.status(404).json({ code: 'BILL_GONE', detail: 'Bill not found' });
+        const [printed, quota, shop] = await Promise.all([
+            Bill.isPrinted(billId, req.user.id),
+            Subscription.getQuotaByUserId(req.user.id),
+            Shop.findByUserId(req.user.id).catch(() => null)
+        ]);
+        // a bill that has not printed yet takes its items out of stock when it prints
+        const stock = !printed && isInventoryType(shop?.business_type) ? await Inventory.needsFor(req.user.id, bill.items) : [];
+        const result = await PrintLock.claim(req.user.id, billKey(billId), { holder, device, credit: req.body.credit !== false, quota, stock });
+        if (!result.ok) return res.status(result.status).json(result.body);
+
+        // read again after the claim: another device may have finished printing it a moment ago
+        const printedNow = printed || await Bill.isPrinted(billId, req.user.id);
+        const elsewhere = printedNow && result.printed && result.printed.holder !== holder ? result.printed : null;
+        res.json({ ok: true, printed: printedNow, printed_elsewhere: elsewhere ? { device: elsewhere.device, at: elsewhere.at } : null, quota });
+    } catch (err) {
+        next(err);
+    }
+};
+
+/** POST /bills/print-release { holder, bill_id | table }: the print was cancelled or failed */
+export const releasePrint = async (req, res) => {
+    const holder = cleanHolder(req.body?.holder);
+    const { bill_id: billId, table } = req.body || {};
+    if (holder && billId) await PrintLock.release(req.user.id, billKey(billId), holder);
+    if (holder && table) await PrintLock.release(req.user.id, tableKey(table), holder);
+    res.json({ ok: true });
 };
 
 export const getBillStats = async (req, res) => {
@@ -292,19 +423,25 @@ export const markBillAsPrinted = async (req, res, next) => {
         }
         const tableNum = bill?.table_number || bill?.table;
 
-        await Bill.markAsPrinted(id, req.user.id);
+        const late = req.body?.late === true;
+        const { moved } = (await Bill.markAsPrinted(id, req.user.id, { late })) || {};
+        const holder = cleanHolder(req.body?.holder);
+        if (holder) await PrintLock.release(req.user.id, billKey(id), holder, { printed: true, device: req.body?.device });
 
-        if (tableNum) {
+        // only the first print frees the table: a later copy must not clear the next customers' order
+        if (tableNum && moved) {
             try {
-                await RestaurantTable.resetTable(req.user.id, tableNum);
+                await Bill.clearTableOf(req.user.id, tableNum, id, { late });
             } catch (e) {}
         }
 
-        // Receipt is printed: deduct stock now for inventory shops!
-        const shop = await Shop.findByUserId(req.user.id).catch(() => null);
-        if (isInventoryType(shop?.business_type)) {
+        // Receipt is printed: deduct stock now for inventory shops! Once per bill: a copy, or the same print reported by
+        // a second device, takes nothing more out
+        const shop = moved ? await Shop.findByUserId(req.user.id).catch(() => null) : null;
+        if (moved && isInventoryType(shop?.business_type)) {
             const billItems = Array.isArray(bill.items) ? bill.items : (typeof bill.items === 'string' ? JSON.parse(bill.items || '[]') : []);
             await Inventory.syncBill(req.user.id, bill.id, billItems, bill.number, shop).catch((e) => console.warn('⚠️ Stock deduction on print:', e.message));
+            await Notification.afterSale(req.user.id);
         }
 
         res.json({ message: 'Bill marked as printed', success: true, id, table_number: tableNum });
@@ -348,6 +485,10 @@ export const markTableBillsAsPrinted = async (req, res, next) => {
 export const deleteBill = async (req, res, next) => {
     try {
         const { id } = req.params;
+        const busy = await PrintLock.busyElsewhere(req.user.id, billKey(id), cleanHolder(req.query.holder));
+        if (busy) {
+            return res.status(409).json({ code: 'PRINTING_ELSEWHERE', detail: 'This is being printed on another device right now. Please wait a moment.', device: busy.device || '' });
+        }
         const deleted = await Bill.delete(id, req.user.id);
         
         if (!deleted) {

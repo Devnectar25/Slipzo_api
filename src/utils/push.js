@@ -39,25 +39,34 @@ function init() {
 
 export const isPushConfigured = () => Boolean(init());
 
-// Tokens Firebase says no longer exist (app uninstalled, data cleared): they are removed from the database
+// The Android channel notifications arrive on (created by the app, see Slipzo/src/lib/push.js). An older app does not
+// have it and uses the default one named in its manifest.
+export const ANDROID_CHANNEL = 'slipzen_alerts';
+
+// Tokens Firebase says no longer exist (app uninstalled, data cleared): they are removed from the database.
+// "invalid-argument" counts only when it is about the token: it also comes back for a message Firebase does not accept,
+// and then every phone would be removed.
 const DEAD_TOKEN_CODES = new Set([
     'messaging/registration-token-not-registered',
-    'messaging/invalid-registration-token',
-    'messaging/invalid-argument'
+    'messaging/invalid-registration-token'
 ]);
+const isDeadToken = (error) => DEAD_TOKEN_CODES.has(error?.code) ||
+    (error?.code === 'messaging/invalid-argument' && /registration token/i.test(error?.message || ''));
 
 /**
  * Sends one notification to many devices. Shown by Android even when the app is closed.
  * data values must be strings; "view" opens that page of the app when the notification is tapped.
- * Returns { sent, failed, deadTokens }.
+ * Returns { sent, failed, deadTokens, reasons } (reasons: why phones could not be reached, with how many).
  */
 export async function sendPush(tokens, { title, body, data = {} }) {
     const unique = [...new Set((tokens || []).filter(Boolean))];
-    const result = { sent: 0, failed: 0, deadTokens: [] };
+    const result = { sent: 0, failed: 0, deadTokens: [], reasons: {} };
+    const note = (reason) => { result.reasons[reason] = (result.reasons[reason] || 0) + 1; };
     if (!unique.length) return result;
     const m = init();
     if (!m) {
         result.failed = unique.length;
+        result.reasons['push-not-set-up'] = unique.length;
         return result;
     }
     const stringData = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)]));
@@ -73,7 +82,7 @@ export async function sendPush(tokens, { title, body, data = {} }) {
                 android: {
                     priority: 'high',
                     notification: {
-                        channelId: 'important',
+                        channelId: ANDROID_CHANNEL,
                         sound: 'default',
                         defaultVibrateTimings: true,
                         color: '#0284c7'
@@ -83,11 +92,15 @@ export async function sendPush(tokens, { title, body, data = {} }) {
             result.sent += res.successCount;
             result.failed += res.failureCount;
             res.responses.forEach((r, idx) => {
-                if (!r.success && DEAD_TOKEN_CODES.has(r.error?.code)) result.deadTokens.push(batch[idx]);
+                if (r.success) return;
+                note(r.error?.code || 'unknown');
+                if (isDeadToken(r.error)) result.deadTokens.push(batch[idx]);
+                else console.warn('⚠️ Push not delivered:', r.error?.code, '-', r.error?.message);
             });
         } catch (err) {
             console.warn('⚠️ Push send failed:', err.message);
             result.failed += batch.length;
+            note(err.code || 'send-failed');
         }
     }
     return result;

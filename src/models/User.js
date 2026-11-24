@@ -157,12 +157,12 @@ class User {
 
     static async findById(id) {
         try {
-            const data = await queryOne('SELECT * FROM users WHERE id = ?', [id]);
-            if (data) {
-                const shop = await queryOne('SELECT * FROM shops WHERE user_id = ?', [id]);
-                return new User({ ...data, shop });
-            }
-            return null;
+            // both at once: this runs on every request of an account that is not in memory yet
+            const [data, shop] = await Promise.all([
+                queryOne('SELECT * FROM users WHERE id = ?', [id]),
+                queryOne('SELECT * FROM shops WHERE user_id = ?', [id])
+            ]);
+            return data ? new User({ ...data, shop }) : null;
         } catch (error) {
             console.error('❌ Error finding user by id:', error);
             throw error;
@@ -191,4 +191,4 @@ class User {
     }
 }
 
-export default User;
+export default User;
