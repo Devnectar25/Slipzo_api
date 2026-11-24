@@ -3,6 +3,15 @@ import { query, queryOne, insert, update } from '../config/database.js';
 import { normalizeUnit } from '../utils/units.js';
 import { normalizeGstRate } from '../utils/gst.js';
 
+// 1 when a shop owner's own item has a category the catalog does not have (typed by the owner): the app gives
+// such a category its own filter button
+const OWN_CATEGORY_SQL = `CASE WHEN mi.user_id IS NOT NULL AND LOWER(TRIM(mi.category)) NOT IN (
+                    SELECT LOWER(TRIM(category)) FROM small_business WHERE category IS NOT NULL
+                    UNION SELECT LOWER(TRIM(category)) FROM kirana_store WHERE category IS NOT NULL
+                    UNION SELECT LOWER(TRIM(category)) FROM clothing_garments WHERE category IS NOT NULL
+                    UNION SELECT LOWER(TRIM(category)) FROM hotel_food WHERE category IS NOT NULL
+                ) THEN 1 ELSE 0 END as own_category`;
+
 export default class UserMenuItem {
     constructor(data) {
         this.id = data.id;
@@ -13,6 +22,7 @@ export default class UserMenuItem {
         this.catalog_price = Number(data.catalog_price || 0);
         this.name = data.name || '';
         this.category = data.category || 'General';
+        this.own_category = Number(data.own_category) === 1;
         this.image_url = data.image_url || '';
         this.description = data.description || '';
         this.barcode = data.barcode || '';
@@ -53,6 +63,7 @@ export default class UserMenuItem {
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
                 COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, 'General') as category,
+                ${OWN_CATEGORY_SQL},
                 COALESCE(sb.image_url, mi.image_url, cg.image_url, hf.image_url, ks.image_url, '') as image_url,
                 COALESCE(sb.description, mi.description, cg.description, hf.description, ks.description, '') as description,
                 COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, ks.barcode, '') as barcode,
@@ -120,6 +131,7 @@ export default class UserMenuItem {
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
                 COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, 'General') as category,
+                ${OWN_CATEGORY_SQL},
                 COALESCE(sb.image_url, mi.image_url, cg.image_url, hf.image_url, ks.image_url, '') as image_url,
                 COALESCE(sb.description, mi.description, cg.description, hf.description, ks.description, '') as description,
                 COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, ks.barcode, '') as barcode,
@@ -159,6 +171,7 @@ export default class UserMenuItem {
                 umi.updated_at,
                 COALESCE(sb.name, mi.name, cg.name, hf.name, ks.name, '') as name,
                 COALESCE(sb.category, mi.category, cg.category, hf.category, ks.category, 'General') as category,
+                ${OWN_CATEGORY_SQL},
                 COALESCE(sb.image_url, mi.image_url, cg.image_url, hf.image_url, ks.image_url, '') as image_url,
                 COALESCE(sb.description, mi.description, cg.description, hf.description, ks.description, '') as description,
                 COALESCE(sb.barcode, mi.barcode, cg.barcode, hf.barcode, ks.barcode, '') as barcode,

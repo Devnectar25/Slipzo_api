@@ -102,8 +102,8 @@ export const register = async (req, res, next) => {
         if (shopName && (shopName.length < 2 || shopName.length > 100)) {
             return res.status(400).json({ detail: 'Shop name must be between 2 and 100 characters' });
         }
-        // How the shop takes payments, and its UPI ID for the payment QR code (checked before anything is created)
-        const paymentFields = paymentFieldsFromBody(req.body, null, { requireUpiId: true });
+        // How the shop takes payments, and its optional UPI ID for the payment QR code (checked before anything is created)
+        const paymentFields = paymentFieldsFromBody(req.body);
 
         const email = String(req.body.email || '').trim().toLowerCase();
         if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || isPhoneEmail(email))) {
