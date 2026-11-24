@@ -40,10 +40,10 @@ const badRequest = (message) => Object.assign(new Error(message), { statusCode: 
 
 /**
  * Payment settings from a request body (sign up or shop profile), merged with the shop's current ones.
- * Returns only the columns to save. A UPI ID that is filled in must be valid; with requireUpiId,
- * choosing UPI without a UPI ID is refused (sign up), otherwise it is allowed (the bill then asks for it).
+ * Returns only the columns to save. A UPI ID that is filled in must be valid; choosing UPI without a UPI ID
+ * is allowed (the bill then asks for it).
  */
-export const paymentFieldsFromBody = (body = {}, current = null, { requireUpiId = false } = {}) => {
+export const paymentFieldsFromBody = (body = {}, current = null) => {
     const touched = body.payment_modes !== undefined || body.default_payment_mode !== undefined || body.upi_id !== undefined;
     if (!touched) return {};
     const modes = body.payment_modes !== undefined ? parsePaymentModes(body.payment_modes) : (current?.payment_modes || [...PAYMENT_MODES]);
@@ -58,10 +58,6 @@ export const paymentFieldsFromBody = (body = {}, current = null, { requireUpiId 
         const upi = normalizeUpiId(body.upi_id);
         if (upi && !isValidUpiId(upi)) throw badRequest('Please enter a valid UPI ID, for example yourname@okaxis');
         fields.upi_id = upi;
-    }
-    const upiAfter = fields.upi_id !== undefined ? fields.upi_id : (current?.upi_id || '');
-    if (requireUpiId && modes.includes('UPI') && !upiAfter) {
-        throw badRequest('Enter your UPI ID to take UPI payments, or turn UPI off');
     }
     return fields;
 };
