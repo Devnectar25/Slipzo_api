@@ -3,13 +3,11 @@ import Otp, { OTP_PURPOSES } from '../models/Otp.js';
 import { clearUserAuthCache } from '../middleware/auth.js';
 import { normalizePhone } from '../utils/phone.js';
 
-import { isProduction } from '../config/security.js';
 
-// No SMS provider is connected yet, so in development the code can be returned as "demo_code".
-// In production, demo mode is FAIL-CLOSED: it stays off unless OTP_DEMO_MODE=true is explicitly set.
+// No SMS provider is connected yet, so the code can be returned as "demo_code" with a 1-click fill button.
+// Once an SMS gateway is integrated, set OTP_DEMO_MODE=false so the code is never returned in the API response.
 const demoMode = () => {
     if (process.env.OTP_DEMO_MODE === 'false') return false;
-    if (isProduction()) return process.env.OTP_DEMO_MODE === 'true';
     return true;
 };
 const maskPhone = (p) => `+91 ${p.slice(0, 2)}******${p.slice(-2)}`;
