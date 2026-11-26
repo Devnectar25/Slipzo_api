@@ -1,10 +1,21 @@
+import crypto from 'crypto';
 import bcryptjs from 'bcryptjs';
 import { query, queryOne } from '../config/database.js';
+import { isProduction } from '../config/security.js';
 
 const SUPER_ADMIN_ID = 'super-admin';
 
 const defaultSuperEmail = () => (process.env.ADMIN_EMAIL || 'admin@slipzo.com').toLowerCase().trim();
-const defaultSuperPassword = () => process.env.ADMIN_PASSWORD || 'Admin@12345';
+const defaultSuperPassword = () => {
+    const envPass = process.env.ADMIN_PASSWORD ? String(process.env.ADMIN_PASSWORD).trim() : '';
+    if (envPass) return envPass;
+    if (isProduction()) {
+        const generated = crypto.randomBytes(18).toString('base64url');
+        console.warn('⚠️ [security] ADMIN_PASSWORD not set on initial seed in production; generated random password. Set ADMIN_PASSWORD or update via DB.');
+        return generated;
+    }
+    return 'Admin@12345';
+};
 const defaultSuperName = () => (process.env.ADMIN_NAME || 'Super Admin').trim();
 const defaultSuperUsername = () => (process.env.ADMIN_USERNAME || 'admin').toLowerCase().trim();
 
@@ -20,11 +31,12 @@ const ensureTable = () => {
                 phone TEXT,
                 bio TEXT,
                 password_hash TEXT NOT NULL,
+                password_changed_at TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 last_login_at TEXT
             )`);
-            for (const col of ['username TEXT', 'phone TEXT', 'bio TEXT', 'created_at TEXT', 'updated_at TEXT', 'last_login_at TEXT']) {
+            for (const col of ['username TEXT', 'phone TEXT', 'bio TEXT', 'password_changed_at TEXT', 'created_at TEXT', 'updated_at TEXT', 'last_login_at TEXT']) {
                 await query(`ALTER TABLE admin_profiles ADD COLUMN ${col}`).catch(() => {});
             }
         })().catch((err) => {
@@ -87,10 +99,14 @@ const ensureSeededSuperAdmin = async () => {
 };
 
 export default class AdminProfile {
-    static async getSuperAdmin({ withHash = false } = {}) {
+    static async getSuperAdmin({ withHash = false, withAuthMeta = false } = {}) {
         const row = await ensureSeededSuperAdmin();
         if (!row) return null;
-        return withHash ? { ...toPublic(row), password_hash: row.password_hash } : toPublic(row);
+        return {
+            ...toPublic(row),
+            ...(withHash ? { password_hash: row.password_hash } : {}),
+            ...(withAuthMeta ? { password_changed_at: row.password_changed_at || null } : {})
+        };
     }
 
     static async matchesSuperLogin(loginInput) {
@@ -142,7 +158,10 @@ export default class AdminProfile {
         await ensureSeededSuperAdmin();
         const hash = await bcryptjs.hash(String(newPassword), 10);
         const now = new Date().toISOString();
-        await query('UPDATE admin_profiles SET password_hash = ?, updated_at = ? WHERE id = ?', [hash, now, SUPER_ADMIN_ID]);
-        return AdminProfile.getSuperAdmin();
+        await query(
+            'UPDATE admin_profiles SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?',
+            [hash, now, now, SUPER_ADMIN_ID]
+        );
+        return AdminProfile.getSuperAdmin({ withAuthMeta: true });
     }
 }

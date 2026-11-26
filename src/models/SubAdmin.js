@@ -23,6 +23,7 @@ const ensureTable = () => {
                 phone TEXT,
                 bio TEXT,
                 password_hash TEXT NOT NULL,
+                password_changed_at TEXT,
                 permissions TEXT NOT NULL DEFAULT '[]',
                 active INTEGER NOT NULL DEFAULT 1,
                 created_by TEXT,
@@ -30,7 +31,7 @@ const ensureTable = () => {
                 updated_at TEXT,
                 last_login_at TEXT
             )`);
-            for (const col of ['username TEXT', 'phone TEXT', 'bio TEXT']) {
+            for (const col of ['username TEXT', 'phone TEXT', 'bio TEXT', 'password_changed_at TEXT']) {
                 await query(`ALTER TABLE sub_admins ADD COLUMN ${col}`).catch(() => {});
             }
         })().catch((err) => { ready = null; throw err; });
@@ -75,6 +76,13 @@ export default class SubAdmin {
     static async findById(id) {
         await ensureTable();
         return toPublic(await queryOne('SELECT * FROM sub_admins WHERE id = ?', [id]));
+    }
+
+    static async findAuthById(id) {
+        await ensureTable();
+        const row = await queryOne('SELECT * FROM sub_admins WHERE id = ?', [id]);
+        if (!row) return null;
+        return { ...toPublic(row), password_changed_at: row.password_changed_at || null };
     }
 
     static async findRowById(id) {
@@ -129,10 +137,14 @@ export default class SubAdmin {
         if (bio !== undefined) { sets.push('bio = ?'); params.push(String(bio || '').trim()); }
         if (permissions !== undefined) { sets.push('permissions = ?'); params.push(JSON.stringify(cleanPermissions(permissions))); }
         if (active !== undefined) { sets.push('active = ?'); params.push(active ? 1 : 0); }
-        if (password !== undefined) { sets.push('password_hash = ?'); params.push(await bcryptjs.hash(password, 10)); }
+        const now = new Date().toISOString();
+        if (password !== undefined) {
+            sets.push('password_hash = ?'); params.push(await bcryptjs.hash(password, 10));
+            sets.push('password_changed_at = ?'); params.push(now);
+        }
         if (!sets.length) return SubAdmin.findById(id);
         sets.push('updated_at = ?');
-        params.push(new Date().toISOString(), id);
+        params.push(now, id);
         await query(`UPDATE sub_admins SET ${sets.join(', ')} WHERE id = ?`, params);
         return SubAdmin.findById(id);
     }

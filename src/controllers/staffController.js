@@ -74,9 +74,9 @@ export const inviteStaff = async (req, res, next) => {
                     if (!workerName) {
                         return res.status(400).json({ detail: "Please enter the staff member's name." });
                     }
-                    const workerPassword = String(req.body.password || phone.slice(-6)).trim();
-                    if (workerPassword.length < 4) {
-                        return res.status(400).json({ detail: 'Password must be at least 4 characters long.' });
+                    const workerPassword = String(req.body.password || '').trim();
+                    if (workerPassword.length < 8 || !/[A-Za-z]/.test(workerPassword) || !/\d/.test(workerPassword)) {
+                        return res.status(400).json({ detail: 'Password must be at least 8 characters and include letters and numbers.' });
                     }
 
                     // created further down, after every check that can still refuse the worker
@@ -122,37 +122,11 @@ export const inviteStaff = async (req, res, next) => {
         }
         const workerUserId = account.id;
 
-        // Check if user is ALREADY staff of another shop OR owner of an active shop
-        let isAlreadyStaffElsewhere = false;
-        let isAlreadyOwner = false;
-
-        if (workerUserId && !isNewUserCreated) {
-            const activeStaffMembership = await ShopStaff.findActiveByWorker(workerUserId);
-            if (activeStaffMembership && activeStaffMembership.owner_user_id !== req.user.id) {
-                isAlreadyStaffElsewhere = true;
-            }
-
-            const hasActiveWorkers = await ShopStaff.hasActiveWorkers(workerUserId);
-            // Someone who runs a shop of their own (bills, or a plan they bought) is invited and decides; they are never
-            // switched over to this shop without being asked.
-            let runsAShop = false;
-            for (const table of ['print_bills', 'saved_bills', 'subscriptions', 'bills']) {
-                if (runsAShop) break;
-                runsAShop = Boolean(await queryOne(`SELECT id FROM ${table} WHERE user_id = ? LIMIT 1`, [workerUserId]).catch((err) => {
-                    if (table === 'bills') return null; // the old table; newer databases may not have it
-                    throw err;
-                }));
-            }
-            if (hasActiveWorkers || runsAShop) {
-                isAlreadyOwner = true;
-            }
-        }
-
         const ownerUser = await User.findById(req.user.id);
         const ownerShopName = ownerUser?.shop?.name || ownerUser?.name || 'A shop';
 
-        // 1. IF USER IS ALREADY STAFF OR OWNER: Send Invitation with Push & In-App Notification!
-        if (isAlreadyStaffElsewhere || isAlreadyOwner) {
+        // Existing registered accounts must ALWAYS explicitly accept an invitation before their workspace switches
+        if (!isNewUserCreated) {
             const { member, code } = await ShopStaff.invite(req.user.id, email);
 
             if (workerUserId) {
@@ -176,11 +150,11 @@ export const inviteStaff = async (req, res, next) => {
                 invite_code: code,
                 is_invite: true,
                 notification_sent: true,
-                message: `Invitation sent! Because this user is already ${isAlreadyOwner ? 'a shop owner' : 'a staff member of another shop'}, an invitation notification with code ${code} was sent to their device.`
+                message: `Invitation sent! Notification with invite code ${code} was sent to ${account.name || 'the user'} for approval.`
             });
         }
 
-        // 2. NEW USER OR NORMAL REGISTERED USER: Add directly as Active Staff!
+        // Brand-new staff account created by owner: attach directly as active staff
         const memberId = uuidv4();
         const nowStr = new Date().toISOString();
         const row = {

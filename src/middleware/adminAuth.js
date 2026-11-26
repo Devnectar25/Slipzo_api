@@ -1,12 +1,11 @@
 import jwt from 'jsonwebtoken';
 import SubAdmin from '../models/SubAdmin.js';
 import AdminProfile from '../models/AdminProfile.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
+import { getJwtSecret, isAdminSessionRevoked } from '../config/security.js';
 
 // Cache admin profiles briefly and invalidate immediately when updated
 const subAdminCache = new Map();
-const SUB_ADMIN_TTL = 30 * 1000;
+const SUB_ADMIN_TTL = 15 * 1000;
 let superAdminCache = null;
 
 export const forgetSubAdmin = (id) => { if (id) subAdminCache.delete(id); else subAdminCache.clear(); };
@@ -15,14 +14,14 @@ export const forgetSuperAdmin = () => { superAdminCache = null; };
 const loadSubAdmin = async (id) => {
     const hit = subAdminCache.get(id);
     if (hit && Date.now() - hit.at < SUB_ADMIN_TTL) return hit.account;
-    const account = await SubAdmin.findById(id);
+    const account = await SubAdmin.findAuthById(id);
     subAdminCache.set(id, { account, at: Date.now() });
     return account;
 };
 
 const loadSuperAdmin = async () => {
     if (superAdminCache && Date.now() - superAdminCache.at < SUB_ADMIN_TTL) return superAdminCache.account;
-    const account = await AdminProfile.getSuperAdmin();
+    const account = await AdminProfile.getSuperAdmin({ withAuthMeta: true });
     superAdminCache = { account, at: Date.now() };
     return account;
 };
@@ -40,7 +39,7 @@ export const adminAuthMiddleware = async (req, res, next) => {
     
     let decoded;
     try {
-        decoded = jwt.verify(token, JWT_SECRET);
+        decoded = jwt.verify(token, getJwtSecret());
     } catch (err) {
         return res.status(401).json({ detail: 'Invalid or expired admin session token' });
     }
@@ -58,6 +57,9 @@ export const adminAuthMiddleware = async (req, res, next) => {
         }
         if (!account || !account.active) {
             return res.status(401).json({ detail: 'This admin account has been turned off or removed.', code: 'ADMIN_REMOVED' });
+        }
+        if (isAdminSessionRevoked(decoded, account)) {
+            return res.status(401).json({ detail: 'Your password was changed. Please sign in again.', code: 'PASSWORD_CHANGED' });
         }
         req.admin = {
             ...decoded,
@@ -79,6 +81,9 @@ export const adminAuthMiddleware = async (req, res, next) => {
             superAcc = await loadSuperAdmin();
         } catch (err) {
             console.warn('⚠️ Super admin profile lookup fallback:', err.message);
+        }
+        if (isAdminSessionRevoked(decoded, superAcc)) {
+            return res.status(401).json({ detail: 'Your password was changed. Please sign in again.', code: 'PASSWORD_CHANGED' });
         }
         req.admin = {
             ...decoded,

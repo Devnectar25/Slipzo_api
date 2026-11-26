@@ -148,16 +148,18 @@ export default class MenuItem {
         const countRes = await queryOne(countSql, params);
         const total = countRes ? (countRes.total || countRes.count || 0) : 0;
 
-        const offset = Math.max(0, (page - 1) * limit);
-        const dataSql = `SELECT * FROM menu_items` + whereClause + ` ORDER BY created_at DESC LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
+        const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+        const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 100, 1), 200);
+        const offset = (safePage - 1) * safeLimit;
+        const dataSql = `SELECT * FROM menu_items` + whereClause + ` ORDER BY created_at DESC LIMIT ${safeLimit} OFFSET ${offset}`;
         const rows = await query(dataSql, params);
 
         return {
             items: (rows || []).map(r => new MenuItem(r)),
             total: Number(total),
-            page: Number(page),
-            limit: Number(limit),
-            totalPages: Math.ceil(total / limit) || 1
+            page: safePage,
+            limit: safeLimit,
+            totalPages: Math.ceil(total / safeLimit) || 1
         };
     }
 

@@ -25,6 +25,7 @@ import { getPublicPlans } from './src/controllers/planController.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 import errorRoutes from './src/routes/errorRoutes.js';
 import { installServerErrorMonitor } from './src/services/errorMonitor.js';
+import { isProduction, createCsrfOriginMiddleware } from './src/config/security.js';
 
 // errors the server logs are kept for the admin panel's Error Monitor (grouped, with a count)
 installServerErrorMonitor();
@@ -39,14 +40,15 @@ app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// Rate limiting (relaxed for development and admin)
+// Rate limiting
 // Behind Vercel/another proxy, req.ip is the proxy unless told to trust it; without this every user shares one rate limit
 app.set('trust proxy', 1);
 
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10000, // Generous limit so users and admins never hit 429 errors
-    skip: (req) => req.originalUrl?.includes('/admin') || req.path?.includes('/admin'),
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
     message: { detail: 'Too many requests, please try again later.' }
 });
 app.use('/api', limiter);
@@ -70,9 +72,16 @@ const allowedOrigins = [
     ...envOrigins
 ].filter(Boolean);
 
-// The web app in dev, and the Android app (Capacitor serves it from http://localhost or capacitor://localhost)
-const isLocalOrigin = (origin) =>
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || origin === 'capacitor://localhost' || origin === 'ionic://localhost';
+// In production, restrict local origins to exact Capacitor WebView origins; allow localhost dev ports only in non-prod
+const isLocalOrigin = (origin) => {
+    if (origin === 'capacitor://localhost' || origin === 'ionic://localhost' || origin === 'http://localhost' || origin === 'https://localhost') {
+        return true;
+    }
+    if (!isProduction()) {
+        return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    }
+    return false;
+};
 
 const corsOptions = {
     origin: (origin, callback) => {
@@ -93,6 +102,7 @@ app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(cookieParser());
+app.use('/api', createCsrfOriginMiddleware(allowedOrigins, isLocalOrigin));
 // Only the routes that receive photos (shop logo, menu item images, admin products) may send big bodies.
 // Everything else is capped at 1 MB so one request cannot make the server hold tens of megabytes.
 const BIG_BODY_PREFIXES = ['/api/shop', '/api/menu', '/api/admin', '/api/small-business', '/api/products'];
@@ -150,18 +160,17 @@ app.get('/api', (req, res) => {
 
 app.get('/api/health', async (req, res) => {
     try {
-        const dbResult = await queryOne('SELECT COUNT(*) as count FROM users');
+        await queryOne('SELECT 1 AS ok');
         res.json({
             status: 'healthy',
-            database: 'connected (Supabase PostgreSQL)',
-            totalUsers: parseInt(dbResult?.count || 0),
+            database: 'connected',
             timestamp: new Date().toISOString()
         });
     } catch (err) {
+        console.error('❌ Health check failed:', err.message);
         res.status(500).json({
             status: 'degraded',
             database: 'disconnected',
-            error: err.message,
             timestamp: new Date().toISOString()
         });
     }

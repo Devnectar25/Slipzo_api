@@ -4,7 +4,62 @@ import { v4 as uuidv4 } from 'uuid';
 import PrintLock, { billKey, cleanHolder } from '../models/PrintLock.js';
 import { query } from '../config/database.js';
 import { priceForPrints, MIN_PRINTS, MAX_PRINTS } from '../utils/pricing.js';
-import { verifyPayment, paymentsConfigured, unverifiedPaymentsAllowed, createOrder } from '../utils/razorpay.js';
+import { verifyPayment, verifyRazorpaySignature, paymentsConfigured, unverifiedPaymentsAllowed, createOrder } from '../utils/razorpay.js';
+
+/**
+ * Authoritative server-side plan and price resolver.
+ * Never trusts client-supplied `amount`, never lets client override DB `prints_count`,
+ * and never infers time-based plans from arbitrary `plan_name` text.
+ */
+const resolvePlanPricing = async (body) => {
+  const planId = body?.plan_id ? String(body.plan_id).trim() : '';
+  const rawPlanName = body?.plan_name ? String(body.plan_name).trim() : '';
+
+  if (planId || rawPlanName) {
+    const pRows = await query(
+      'SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1',
+      [planId, rawPlanName, 'active']
+    );
+    if (pRows && pRows.length > 0) {
+      const row = pRows[0];
+      const price = Math.round(Number(row.price));
+      if (!Number.isFinite(price) || price <= 0) {
+        return { error: 'Invalid plan price configured.' };
+      }
+      const planType = row.plan_type === 'time' ? 'time' : 'print';
+      const durationMonths = planType === 'time' ? Math.max(0, Number(row.duration_months || 0)) : 0;
+      const prints = Math.max(0, Number(row.prints_count || 0));
+      return {
+        planRow: row,
+        planId: row.id,
+        planName: row.name,
+        price,
+        prints,
+        planType,
+        durationMonths
+      };
+    }
+    if (planId) {
+      return { error: 'Selected plan was not found or is inactive.' };
+    }
+  }
+
+  // Custom print pack: strict server-side pricing only (no client amount fallback)
+  const prints = Number(body?.prints_count);
+  const price = priceForPrints(prints);
+  if (price === null || !Number.isFinite(price) || price <= 0) {
+    return { error: `Invalid plan or print count. Custom packs support ${MIN_PRINTS} to ${MAX_PRINTS} prints.` };
+  }
+  return {
+    planRow: null,
+    planId: null,
+    planName: `Custom ${prints} Prints Pack`,
+    price,
+    prints,
+    planType: 'print',
+    durationMonths: 0
+  };
+};
 
 // Step 1 of paying from the phone app: the server decides the price and opens a Razorpay order for it.
 export const createPaymentOrder = async (req, res, next) => {
@@ -12,40 +67,19 @@ export const createPaymentOrder = async (req, res, next) => {
     if (!req.user?.id) {
       return res.status(401).json({ detail: 'Please sign in to buy prints.' });
     }
-    const planId = req.body?.plan_id;
-    const planName = req.body?.plan_name;
-    let prints = Number(req.body?.prints_count);
-    let price = null;
-
-    if (planId || planName) {
-      const pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', planName || '', 'active']);
-      if (pRows && pRows.length > 0) {
-        price = Math.round(Number(pRows[0].price));
-        if (!prints && pRows[0].prints_count) {
-          prints = Number(pRows[0].prints_count);
-        }
-      }
+    const resolved = await resolvePlanPricing(req.body);
+    if (resolved.error) {
+      return res.status(400).json({ detail: resolved.error });
     }
-
-    if (price === null) {
-      price = priceForPrints(prints);
-    }
-    if (price === null && req.body?.amount) {
-      price = Math.round(Number(req.body.amount));
-    }
-
-    if (price === null || isNaN(price) || price <= 0) {
-      return res.status(400).json({ detail: `Invalid plan or price.` });
-    }
+    const { price, prints, planName } = resolved;
     if (!paymentsConfigured()) {
       console.error('❌ RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set: cannot open a payment order');
       return res.status(503).json({ detail: 'Payment verification is not configured on the server.', code: 'NOT_CONFIGURED' });
     }
     const receipt = `slp_${Date.now().toString(36)}_${String(req.user.id).replace(/-/g, '').slice(0, 10)}`;
-    const made = await createOrder(price, receipt, { user_id: String(req.user.id), prints: String(prints || 0), plan_name: String(req.body?.plan_name || '').slice(0, 60) });
+    const made = await createOrder(price, receipt, { user_id: String(req.user.id), prints: String(prints || 0), plan_name: String(planName || '').slice(0, 60) });
     if (!made.ok) {
-      const status = made.code === 'GATEWAY_UNREACHABLE' ? 502 : 502;
-      return res.status(status).json({ detail: made.detail, code: made.code });
+      return res.status(502).json({ detail: made.detail, code: made.code });
     }
     res.json({
       order_id: made.order.id,
@@ -67,7 +101,7 @@ const confirming = new Set();
 export const createSubscription = async (req, res, next) => {
   let lockedPaymentId = null;
   try {
-    const { plan_name, prints_count, payment_id } = req.body;
+    const { plan_name, payment_id } = req.body;
 
     if (!req.user?.id) {
       return res.status(401).json({ detail: 'Please sign in to buy prints.' });
@@ -76,33 +110,11 @@ export const createSubscription = async (req, res, next) => {
       return res.status(400).json({ detail: 'Plan name is required' });
     }
 
-    // Determine price and prints: check plans table first, then calculate for custom packs
-    const planId = req.body?.plan_id;
-    let prints = Number(prints_count) || 0;
-    let price = null;
-    // Also read further down, when the subscription is saved
-    let pRows = null;
-
-    if (planId || plan_name) {
-      pRows = await query('SELECT * FROM plans WHERE (id = ? OR name = ?) AND status = ? LIMIT 1', [planId || '', plan_name || '', 'active']);
-      if (pRows && pRows.length > 0) {
-        price = Math.round(Number(pRows[0].price));
-        if (!prints && pRows[0].prints_count) {
-          prints = Number(pRows[0].prints_count);
-        }
-      }
+    const resolved = await resolvePlanPricing(req.body);
+    if (resolved.error) {
+      return res.status(400).json({ detail: resolved.error });
     }
-
-    if (price === null) {
-      price = priceForPrints(prints);
-    }
-    if (price === null && req.body?.amount) {
-      price = Math.round(Number(req.body.amount));
-    }
-
-    if (price === null || isNaN(price) || price <= 0) {
-      return res.status(400).json({ detail: `Invalid plan price.` });
-    }
+    const { planId, planName, price, prints, planType, durationMonths } = resolved;
 
     const paymentId = String(payment_id || '').trim();
     if (!paymentId) {
@@ -126,6 +138,10 @@ export const createSubscription = async (req, res, next) => {
     } else {
       // A payment from the phone app's own screen comes with the order it was made for
       const orderId = /^order_[A-Za-z0-9]+$/.test(String(req.body.order_id || '')) ? String(req.body.order_id) : null;
+      const signature = req.body?.razorpay_signature ? String(req.body.razorpay_signature).trim() : '';
+      if (orderId && signature && paymentsConfigured() && !verifyRazorpaySignature(orderId, paymentId, signature)) {
+        return res.status(402).json({ detail: 'Payment signature mismatch.', code: 'BAD_SIGNATURE' });
+      }
       const check = await verifyPayment(paymentId, price, orderId);
       if (!check.ok) {
         const status = check.code === 'NOT_CONFIGURED' ? 503 : check.code === 'GATEWAY_UNREACHABLE' ? 502 : 402;
@@ -136,23 +152,14 @@ export const createSubscription = async (req, res, next) => {
 
     let subscription;
     try {
-      const planRow = pRows && pRows.length > 0 ? pRows[0] : null;
-      let planType = planRow?.plan_type || 'print';
-      let durationMonths = Number(planRow?.duration_months || 0);
-      if (!durationMonths) {
-        if (/1\s*year/i.test(plan_name)) { planType = 'time'; durationMonths = 12; }
-        else if (/3\s*month/i.test(plan_name)) { planType = 'time'; durationMonths = 3; }
-        else if (/1\s*month/i.test(plan_name)) { planType = 'time'; durationMonths = 1; }
-      }
-
       subscription = await Subscription.create({
         user_id: req.user.id,
         user_name: req.user.name || 'Slipzen Member',
         user_email: req.user.email,
-        plan_id: planId || planRow?.id || null,
+        plan_id: planId,
         plan_type: planType,
         duration_months: durationMonths,
-        plan_name,
+        plan_name: planName,
         amount: price,
         prints_count: prints,
         payment_id: paymentId,

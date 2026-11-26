@@ -11,9 +11,10 @@ import { getAdminPlans, createPlan, updatePlan, deletePlan } from '../controller
 import Push from '../models/Push.js';
 import ErrorLog from '../models/ErrorLog.js';
 import { isPushConfigured } from '../utils/push.js';
+import { getJwtSecret, getAdminCookieOptions, adminLoginLimiter } from '../config/security.js';
+import { processUploadImage, sanitizeAssetUrl } from '../utils/imageUpload.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@slipzo.com').toLowerCase().trim();
 const USERNAME_REGEX = /^[a-zA-Z0-9._-]{3,40}$/;
@@ -35,18 +36,16 @@ const formatAdminResponse = (a) => ({
 });
 
 const issueAdminCookie = (res, payload) => {
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign(payload, getJwtSecret(), { expiresIn: '1d' });
     res.cookie('slipzo_admin_token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        ...getAdminCookieOptions(),
         maxAge: 24 * 60 * 60 * 1000
     });
     return token;
 };
 
 // Admin Login Endpoint (supports Email or Username for both Super Admin and Sub-admins)
-router.post('/login', async (req, res) => {
+router.post('/login', adminLoginLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -64,11 +63,13 @@ router.post('/login', async (req, res) => {
             if (!superAdmin) {
                 return res.status(401).json({ detail: 'Invalid Admin credentials' });
             }
+            const superMeta = await AdminProfile.getSuperAdmin({ withAuthMeta: true }).catch(() => null);
             const token = issueAdminCookie(res, {
                 isAdmin: true,
                 email: superAdmin.email,
                 role: 'Super Admin',
-                loginTime
+                loginTime,
+                sv: superMeta?.password_changed_at || null
             });
             return res.json({
                 detail: 'Admin login successful',
@@ -82,12 +83,14 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ detail: 'Invalid Admin credentials' });
         }
 
+        const subAuth = await SubAdmin.findAuthById(sub.id).catch(() => null);
         const subToken = issueAdminCookie(res, {
             isAdmin: true,
             subAdminId: sub.id,
             email: sub.email,
             role: 'Sub Admin',
-            loginTime
+            loginTime,
+            sv: subAuth?.password_changed_at || null
         });
 
         return res.json({
@@ -155,11 +158,13 @@ router.put('/profile', adminAuthMiddleware, async (req, res) => {
             });
             forgetSuperAdmin();
 
+            const superMeta = await AdminProfile.getSuperAdmin({ withAuthMeta: true }).catch(() => null);
             const token = issueAdminCookie(res, {
                 isAdmin: true,
                 email: updated.email,
                 role: 'Super Admin',
-                loginTime: req.admin.loginTime || new Date().toISOString()
+                loginTime: req.admin.loginTime || new Date().toISOString(),
+                sv: superMeta?.password_changed_at || null
             });
 
             return res.json({
@@ -200,12 +205,14 @@ router.put('/profile', adminAuthMiddleware, async (req, res) => {
         });
         forgetSubAdmin(req.admin.id);
 
+        const subAuth = await SubAdmin.findAuthById(updated.id).catch(() => null);
         const token = issueAdminCookie(res, {
             isAdmin: true,
             subAdminId: updated.id,
             email: updated.email,
             role: 'Sub Admin',
-            loginTime: req.admin.loginTime || new Date().toISOString()
+            loginTime: req.admin.loginTime || new Date().toISOString(),
+            sv: subAuth?.password_changed_at || null
         });
 
         return res.json({
@@ -232,8 +239,8 @@ router.put('/profile/password', adminAuthMiddleware, async (req, res) => {
         if (!currentPassword) {
             return res.status(400).json({ detail: 'Please enter your current password.' });
         }
-        if (newPassword.length < 6 || newPassword.length > 100) {
-            return res.status(400).json({ detail: 'New password must be between 6 and 100 characters.' });
+        if (newPassword.length < 8 || newPassword.length > 100 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+            return res.status(400).json({ detail: 'New password must be 8–100 characters and include letters and numbers.' });
         }
         if (confirmPassword !== undefined && confirmPassword !== newPassword) {
             return res.status(400).json({ detail: 'New password and confirmation do not match.' });
@@ -247,18 +254,42 @@ router.put('/profile/password', adminAuthMiddleware, async (req, res) => {
             if (!valid) {
                 return res.status(400).json({ detail: 'Current password is incorrect.' });
             }
-            await AdminProfile.changeSuperPassword(newPassword);
+            const updatedSuper = await AdminProfile.changeSuperPassword(newPassword);
             forgetSuperAdmin();
-            return res.json({ detail: 'Password changed successfully.' });
+            const token = issueAdminCookie(res, {
+                isAdmin: true,
+                email: updatedSuper.email,
+                role: 'Super Admin',
+                loginTime: req.admin.loginTime || new Date().toISOString(),
+                sv: updatedSuper.password_changed_at || null
+            });
+            return res.json({
+                detail: 'Password changed successfully.',
+                token,
+                admin: formatAdminResponse({ ...updatedSuper, isSuper: true, loginTime: req.admin.loginTime })
+            });
         }
 
         const valid = await SubAdmin.verifyPassword(req.admin.id, currentPassword);
         if (!valid) {
             return res.status(400).json({ detail: 'Current password is incorrect.' });
         }
-        await SubAdmin.update(req.admin.id, { password: newPassword });
+        const updatedSub = await SubAdmin.update(req.admin.id, { password: newPassword });
         forgetSubAdmin(req.admin.id);
-        return res.json({ detail: 'Password changed successfully.' });
+        const subAuth = await SubAdmin.findAuthById(req.admin.id).catch(() => null);
+        const token = issueAdminCookie(res, {
+            isAdmin: true,
+            subAdminId: updatedSub.id,
+            email: updatedSub.email,
+            role: 'Sub Admin',
+            loginTime: req.admin.loginTime || new Date().toISOString(),
+            sv: subAuth?.password_changed_at || null
+        });
+        return res.json({
+            detail: 'Password changed successfully.',
+            token,
+            admin: formatAdminResponse({ ...updatedSub, isSuper: false, loginTime: req.admin.loginTime })
+        });
     } catch (err) {
         console.error('❌ Admin password change error:', err);
         return res.status(500).json({ detail: 'Could not change password.' });
@@ -355,7 +386,7 @@ router.delete('/sub-admins/:id', adminAuthMiddleware, superAdminOnly, async (req
 
 // Admin Logout
 router.post('/logout', (req, res) => {
-    res.clearCookie('slipzo_admin_token');
+    res.clearCookie('slipzo_admin_token', getAdminCookieOptions());
     return res.json({ detail: 'Admin logged out successfully' });
 });
 
@@ -793,35 +824,19 @@ router.post('/products', adminAuthMiddleware, adminCan('products'), async (req, 
         }
         const userId = adminUser.id;
 
-        // Process base64 photos and upload directly to Supabase Storage
+        // Process base64 photos and upload directly to Supabase Storage (blocking SVG/unsafe URLs)
         const processedPhotoUrls = [];
         for (let idx = 0; idx < photoList.length; idx++) {
             const rawImg = photoList[idx];
-            if (typeof rawImg === 'string' && rawImg.startsWith('data:image/')) {
-                try {
-                    const matches = rawImg.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-                    if (matches) {
-                        const contentType = matches[1];
-                        const base64Data = matches[2];
-                        const buffer = Buffer.from(base64Data, 'base64');
-                        const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                        const fileName = `products/${slug}-${Date.now()}-${idx}.jpg`;
-
-                        const { error: uploadError } = await supabase.storage
-                            .from('menu-item-images')
-                            .upload(fileName, buffer, { contentType, upsert: true });
-
-                        if (!uploadError) {
-                            const publicUrl = supabase.storage.from('menu-item-images').getPublicUrl(fileName).data.publicUrl;
-                            processedPhotoUrls.push(publicUrl);
-                            continue;
-                        }
-                    }
-                } catch (e) {
-                    console.warn('⚠️ Supabase image upload fallback:', e.message);
-                }
+            if (typeof rawImg === 'string' && rawImg.trim()) {
+                const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'product';
+                const uploadedUrl = await processUploadImage(rawImg, {
+                    bucket: 'menu-item-images',
+                    allowRelative: true,
+                    objectPathBuilder: (ext) => `products/${slug}-${Date.now()}-${idx}.${ext}`
+                });
+                if (uploadedUrl) processedPhotoUrls.push(uploadedUrl);
             }
-            processedPhotoUrls.push(rawImg);
         }
 
         const mainImage = processedPhotoUrls[0] || image || '';
@@ -895,6 +910,9 @@ router.post('/products', adminAuthMiddleware, adminCan('products'), async (req, 
         const newProd = await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
         return res.status(201).json({ detail: 'Product created successfully', product: newProd });
     } catch (err) {
+        if (err?.statusCode) {
+            return res.status(err.statusCode).json({ detail: err.message });
+        }
         console.error('❌ Error creating admin product:', err);
         return res.status(500).json({ detail: 'Failed to create product' });
     }
@@ -919,9 +937,12 @@ router.put('/products/:id', adminAuthMiddleware, adminCan('products'), async (re
         const newName = name !== undefined ? name.trim() : existing.name;
         const newPrice = price !== undefined ? parseFloat(price) : existing.price;
         const newCat = category !== undefined ? category.trim() : existing.category;
-        const newLink = product_link !== undefined ? (product_link ? product_link.trim() : '') : (existing.product_link || '');
+        const newLink = product_link !== undefined ? sanitizeAssetUrl(product_link) : (existing.product_link || '');
         const newDesc = description !== undefined ? (description ? description.trim() : '') : (existing.description || '');
-        const newImage = image !== undefined ? (image ? image.trim() : '') : (existing.image || '');
+        const slug = (newName || 'product').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'product';
+        const newImage = image !== undefined
+            ? (image ? await processUploadImage(image, { bucket: 'menu-item-images', allowRelative: true, objectPathBuilder: (ext) => `products/${slug}-${Date.now()}.${ext}` }) : '')
+            : (existing.image || '');
         const newStock = stock !== undefined ? parseInt(stock) : existing.stock;
         const now = new Date().toISOString();
 
@@ -933,6 +954,9 @@ router.put('/products/:id', adminAuthMiddleware, adminCan('products'), async (re
         const updated = await queryOne(`SELECT * FROM products WHERE id = ?`, [targetId]);
         return res.json({ detail: 'Product updated successfully', product: updated });
     } catch (err) {
+        if (err?.statusCode) {
+            return res.status(err.statusCode).json({ detail: err.message });
+        }
         console.error('❌ Error updating admin product:', err);
         return res.status(500).json({ detail: 'Failed to update product' });
     }
@@ -1116,38 +1140,12 @@ router.get('/menu', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
 
 // Helper to process base64 image upload to Supabase Storage
 async function processMasterItemImage(rawImg, name) {
-    if (!rawImg || typeof rawImg !== 'string' || !rawImg.trim()) return '';
-    const cleanImg = rawImg.trim();
-    if (cleanImg.startsWith('http://') || cleanImg.startsWith('https://')) return cleanImg;
-
-    if (cleanImg.startsWith('data:image/')) {
-        try {
-            const matches = cleanImg.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
-            if (matches) {
-                const contentType = matches[1];
-                const base64Data = matches[2];
-                const buffer = Buffer.from(base64Data, 'base64');
-                let ext = 'jpg';
-                if (contentType.includes('png')) ext = 'png';
-                else if (contentType.includes('webp')) ext = 'webp';
-
-                const safeName = (name || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-                const fileName = `admin/${safeName}-${Date.now()}.${ext}`;
-
-                const { error: uploadError } = await supabase.storage
-                    .from('menu-item-images')
-                    .upload(fileName, buffer, { contentType, upsert: true });
-
-                if (!uploadError) {
-                    const publicUrl = supabase.storage.from('menu-item-images').getPublicUrl(fileName).data.publicUrl;
-                    return publicUrl;
-                }
-            }
-        } catch (err) {
-            console.warn('⚠️ Base64 image upload error:', err.message);
-        }
-    }
-    return cleanImg;
+    const safeName = (name || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+    return processUploadImage(rawImg, {
+        bucket: 'menu-item-images',
+        allowRelative: false,
+        objectPathBuilder: (ext) => `admin/${safeName}-${Date.now()}.${ext}`
+    });
 }
 
 // Create New Master Menu Item

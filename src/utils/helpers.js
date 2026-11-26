@@ -1,16 +1,15 @@
 import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
+import { getJwtSecret } from '../config/security.js';
 
 export const generateToken = (userId) => {
     console.log('🔑 Generating token for user:', userId);
-    return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
+    return jwt.sign({ userId }, getJwtSecret(), { expiresIn: '7d' });
 };
 
 export const verifyToken = (token) => {
     try {
         console.log('🔑 Verifying token...');
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, getJwtSecret());
         console.log('✅ Token verified for user:', decoded.userId);
         return decoded;
     } catch (err) {

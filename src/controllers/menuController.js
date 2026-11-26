@@ -3,9 +3,10 @@ import SmallBusiness from '../models/SmallBusiness.js';
 import MenuItem from '../models/MenuItem.js';
 import Shop from '../models/Shop.js';
 import Catalog from '../models/Catalog.js';
-import { supabase, insert, query, queryOne } from '../config/database.js';
+import { insert, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
 import Inventory from '../models/Inventory.js';
+import { processUploadImage } from '../utils/imageUpload.js';
 
 // Each shop type's ready-made catalog table (used to stop a custom item copying a catalog name)
 const CATALOG_TABLE_FOR_SHOP = {
@@ -57,73 +58,20 @@ function getCategoryTableAndBucket(categoryInput) {
 }
 
 /**
- * Uploads a custom product image to Supabase Storage in the specified category bucket
+ * Validates and uploads a custom raster product image to Supabase Storage (blocking SVG/unsafe URLs).
  */
 async function uploadCustomProductImage(rawData, itemName, userId, targetBucket = 'menu-item-images') {
-  try {
-    if (!rawData || !String(rawData).trim()) return '';
-    const cleanStr = String(rawData).trim();
-    if (cleanStr.startsWith('http://') || cleanStr.startsWith('https://')) {
-      return cleanStr;
-    }
+  const safeName = (itemName || 'item')
+    .trim()
+    .replace(/[^a-zA-Z0-9_\-]/g, '_')
+    .replace(/_+/g, '_')
+    .toLowerCase() || 'item';
 
-    let mimeType = 'image/png';
-    let ext = 'png';
-    let base64Data = cleanStr;
-
-    if (cleanStr.startsWith('data:')) {
-      const match = cleanStr.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
-      if (match) {
-        mimeType = match[1];
-        base64Data = match[2];
-        if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
-        else if (mimeType === 'image/webp') ext = 'webp';
-        else if (mimeType === 'image/gif') ext = 'gif';
-        else if (mimeType === 'image/svg+xml') ext = 'svg';
-      }
-    }
-
-    const buffer = Buffer.from(base64Data, 'base64');
-    const safeName = (itemName || 'item')
-      .trim()
-      .replace(/[^a-zA-Z0-9_\-]/g, '_')
-      .replace(/_+/g, '_')
-      .toLowerCase();
-
-    const fileName = `custom/${userId}_${safeName}_${Date.now()}.${ext}`;
-
-    // Upload to designated category bucket
-    const { error: uploadError } = await supabase.storage
-      .from(targetBucket)
-      .upload(fileName, buffer, {
-        contentType: mimeType,
-        upsert: true
-      });
-
-    if (uploadError) {
-      console.warn(`⚠️ Supabase custom image upload warning for bucket '${targetBucket}':`, uploadError.message);
-      // Fallback attempt to default 'menu-item-images' bucket if primary category bucket doesn't exist
-      if (targetBucket !== 'menu-item-images') {
-        const { error: fallbackErr } = await supabase.storage
-          .from('menu-item-images')
-          .upload(fileName, buffer, { contentType: mimeType, upsert: true });
-        if (!fallbackErr) {
-          const { data: fallbackUrlData } = supabase.storage.from('menu-item-images').getPublicUrl(fileName);
-          return fallbackUrlData?.publicUrl || cleanStr;
-        }
-      }
-      return cleanStr;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from(targetBucket)
-      .getPublicUrl(fileName);
-
-    return urlData?.publicUrl || cleanStr;
-  } catch (err) {
-    console.error('Error in uploadCustomProductImage:', err);
-    return rawData;
-  }
+  return processUploadImage(rawData, {
+    bucket: targetBucket,
+    fallbackBucket: 'menu-item-images',
+    objectPathBuilder: (ext) => `custom/${userId}_${safeName}_${Date.now()}.${ext}`
+  });
 }
 
 /**
@@ -283,7 +231,7 @@ export const createMenuItem = async (req, res, next) => {
             }
 
             let finalImageUrl = image_url ? String(image_url).trim() : '';
-            if (finalImageUrl && (finalImageUrl.startsWith('data:') || (finalImageUrl.length > 500 && !finalImageUrl.startsWith('http')))) {
+            if (finalImageUrl) {
                 finalImageUrl = await uploadCustomProductImage(finalImageUrl, name, req.user.id, bucketName);
             }
 

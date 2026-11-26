@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { query, queryOne, insert } from '../config/database.js';
+import { getJwtSecret } from '../config/security.js';
 
 // One-time codes sent to a phone: sign up ("register") and forgot password ("reset").
 // Codes are stored hashed, live 10 minutes, allow 5 wrong tries, and a new one can be asked for after 30 seconds.
@@ -12,10 +13,9 @@ const MAX_TRIES = 5;
 const MAX_CODES_PER_HOUR = 6;
 const TOKEN_TTL = '15m';
 
-const SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
 const fail = (message, statusCode, code, extra = {}) => Object.assign(new Error(message), { statusCode, code, ...extra });
 const hashCode = (phone, purpose, code) =>
-    crypto.createHmac('sha256', SECRET).update(`${phone}:${purpose}:${code}`).digest('hex');
+    crypto.createHmac('sha256', getJwtSecret()).update(`${phone}:${purpose}:${code}`).digest('hex');
 const sameHash = (a, b) => {
     const x = Buffer.from(String(a), 'hex');
     const y = Buffer.from(String(b), 'hex');
@@ -87,14 +87,14 @@ export default class Otp {
         }
 
         await query('UPDATE otp_codes SET used_at = ? WHERE id = ?', [new Date().toISOString(), row.id]);
-        return jwt.sign({ kind: 'otp', phone, purpose }, SECRET, { expiresIn: TOKEN_TTL });
+        return jwt.sign({ kind: 'otp', phone, purpose }, getJwtSecret(), { expiresIn: TOKEN_TTL });
     }
 
     /** The token's details when it came from a correct code for this phone and purpose (and is still fresh), else null */
     static checkToken(token, phone, purpose) {
         if (!token) return null;
         try {
-            const data = jwt.verify(String(token), SECRET);
+            const data = jwt.verify(String(token), getJwtSecret());
             return data?.kind === 'otp' && data.phone === phone && data.purpose === purpose ? data : null;
         } catch (_) {
             return null;

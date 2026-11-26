@@ -17,7 +17,7 @@ setInterval(() => { const cut = Date.now() - 120000; for (const [k, v] of hits) 
 
 /** The web app and the Android app report the errors their console saw. Signed-in or not. */
 router.post('/', optionalAuth, async (req, res) => {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const ip = req.ip || 'unknown';
     if (!allowed(ip)) return res.status(429).json({ detail: 'Too many error reports.' });
     const body = req.body || {};
     const list = Array.isArray(body.errors) ? body.errors.slice(0, 20) : [];

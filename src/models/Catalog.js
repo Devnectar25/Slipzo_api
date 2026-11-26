@@ -25,11 +25,33 @@ export default class Catalog {
         }
     }
 
+    static getCanonicalBusinessType(businessType) {
+        const type = String(businessType || '').toLowerCase().trim();
+        switch (type) {
+            case 'kirana_grocery':
+            case 'kirana':
+            case 'grocery':
+                return 'kirana_grocery';
+            case 'clothing_garments':
+            case 'clothing':
+            case 'garments':
+                return 'clothing_garments';
+            case 'hotel_food':
+            case 'hotel':
+            case 'restaurant':
+                return 'hotel_food';
+            case 'small_business':
+            default:
+                return 'small_business';
+        }
+    }
+
     /**
      * Fetch catalog for a specific business type and user
      */
     static async findCatalogForUser(userId, businessType = 'small_business', search = '', category = 'all') {
-        const tableName = this.getTableName(businessType);
+        const canonicalType = this.getCanonicalBusinessType(businessType);
+        const tableName = this.getTableName(canonicalType);
 
         let sql = `
             SELECT 
@@ -49,13 +71,13 @@ export default class Catalog {
                 umi.custom_price as user_price,
                 umi.barcode_active as user_barcode_active,
                 CASE WHEN umi.id IS NOT NULL THEN true ELSE false END as is_added,
-                '${businessType}' as business_type
+                ? as business_type
             FROM ${tableName} cat
             LEFT JOIN user_menu_items umi 
                 ON cat.id = umi.menu_item_id AND umi.user_id = ?
             WHERE (cat.is_available IS NOT FALSE)
         `;
-        const params = [userId];
+        const params = [canonicalType, userId];
 
         if (search && search.trim()) {
             sql += ` AND (LOWER(cat.name) LIKE LOWER(?) OR LOWER(cat.barcode) LIKE LOWER(?) OR LOWER(cat.category) LIKE LOWER(?))`;
@@ -70,10 +92,8 @@ export default class Catalog {
         sql += ` ORDER BY cat.barcode ASC, cat.name ASC`;
 
         const isDefaultBActive = !(
-            businessType.toLowerCase().includes('small_business') || 
-            businessType.toLowerCase().includes('hotel') || 
-            businessType.toLowerCase().includes('food') || 
-            businessType.toLowerCase().includes('cafe')
+            canonicalType === 'small_business' ||
+            canonicalType === 'hotel_food'
         );
 
         const rows = await query(sql, params);
@@ -93,7 +113,7 @@ export default class Catalog {
             is_added: Boolean(r.is_added),
             user_menu_item_id: r.user_menu_item_id || null,
             user_price: r.user_price !== undefined && r.user_price !== null ? Number(r.user_price) : null,
-            business_type: businessType
+            business_type: canonicalType
         }));
     }
 
