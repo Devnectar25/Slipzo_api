@@ -1,65 +1,31 @@
 import Shop from '../models/Shop.js';
 import UserMenuItem from '../models/UserMenuItem.js';
 import RestaurantTable from '../models/RestaurantTable.js';
-import { query, supabase } from '../config/database.js';
+import { query } from '../config/database.js';
 import { clearUserAuthCache } from '../middleware/auth.js';
 import { paymentFieldsFromBody } from '../utils/paymentModes.js';
 import { flag } from '../utils/gst.js';
+import { processUploadImage } from '../utils/imageUpload.js';
 
 const BUCKET_NAME = 'Shop_Profile';
 
 /**
- * Uploads a shop profile image to Supabase Storage bucket named 'Shop_Profile'
- * named after that particular shop and user.
+ * Uploads a validated raster shop profile image to Supabase Storage bucket named 'Shop_Profile'
+ * (or validates an external HTTP/HTTPS image URL). Rejects SVG uploads to prevent stored XSS.
  */
 async function uploadShopProfileImage(rawData, shopName, userId) {
-  try {
-    let mimeType = 'image/png';
-    let ext = 'png';
-    let base64Data = rawData;
+  const cleanName = (shopName || 'shop')
+    .trim()
+    .replace(/[^a-zA-Z0-9_\-]/g, '_')
+    .replace(/_+/g, '_')
+    .toLowerCase();
 
-    if (rawData.startsWith('data:')) {
-      const match = rawData.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
-      if (match) {
-        mimeType = match[1];
-        base64Data = match[2];
-        if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
-        else if (mimeType === 'image/webp') ext = 'webp';
-        else if (mimeType === 'image/svg+xml') ext = 'svg';
-        else if (mimeType === 'image/gif') ext = 'gif';
-      }
-    }
-
-    const buffer = Buffer.from(base64Data, 'base64');
-    const cleanName = (shopName || 'shop')
-      .trim()
-      .replace(/[^a-zA-Z0-9_\-]/g, '_')
-      .replace(/_+/g, '_')
-      .toLowerCase();
-
-    const fileName = `${cleanName}_${userId}_${Date.now()}.${ext}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(fileName, buffer, {
-        contentType: mimeType,
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.error('❌ Supabase storage upload error:', uploadError.message);
-      throw new Error(`Failed to upload to storage: ${uploadError.message}`);
-    }
-
-    const { data: urlData } = supabase.storage
-      .from(BUCKET_NAME)
-      .getPublicUrl(fileName);
-
-    return `${urlData.publicUrl}?t=${Date.now()}`;
-  } catch (err) {
-    console.error('❌ Error uploading shop profile image to bucket:', err);
-    throw err;
-  }
+  return processUploadImage(rawData, {
+    bucket: BUCKET_NAME,
+    appendCacheBust: true,
+    throwOnUploadError: true,
+    objectPathBuilder: (ext) => `${cleanName}_${userId}_${Date.now()}.${ext}`
+  });
 }
 
 export const getShop = async (req, res, next) => {
@@ -182,13 +148,9 @@ export const updateShop = async (req, res, next) => {
       const logoInput = req.body.logo_url ? String(req.body.logo_url).trim() : '';
       if (!logoInput) {
         updates.logo_url = '';
-      } else if (logoInput.startsWith('data:image/') || (logoInput.length > 500 && !logoInput.startsWith('http'))) {
-        // Raw/base64 image uploaded: store in Supabase Storage bucket named on that particular shop & user
+      } else {
         const targetShopName = name?.trim() || req.user.name || req.user.username || 'shop';
         updates.logo_url = await uploadShopProfileImage(logoInput, targetShopName, req.user.id);
-      } else {
-        // Clean URL pointing to bucket
-        updates.logo_url = logoInput;
       }
     }
 

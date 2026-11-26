@@ -1,5 +1,6 @@
 import { query, queryOne } from '../config/database.js';
 import { v4 as uuidv4 } from 'uuid';
+import { sanitizeAssetUrl } from '../utils/imageUpload.js';
 
 const DEFAULT_HARDWARE_PRODUCTS = [
     { 
@@ -82,7 +83,8 @@ class Product {
         const { user_id, name, price = 0, category = 'General', sku = '', product_link = '', stock = 100, image = '', images = '', description = '', status = 'active' } = data;
         const cleanName = name ? name.trim() : '';
         const cleanSku = sku ? sku.trim() : '';
-        const cleanLink = product_link ? product_link.trim() : '';
+        const cleanLink = product_link ? sanitizeAssetUrl(product_link) : '';
+        const cleanImage = image ? sanitizeAssetUrl(image, { allowRelative: true }) : '';
 
         // Duplicate prevention check: return existing record if product with exact SKU or Name already exists
         if (cleanSku) {
@@ -102,7 +104,7 @@ class Product {
         await query(
             `INSERT INTO products (id, user_id, name, price, category, sku, product_link, stock, image, images, description, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, user_id, cleanName, parseFloat(price) || 0, category.trim() || 'General', cleanSku || null, cleanLink, parseInt(stock) || 100, image ? image.trim() : '', imagesStr, description ? description.trim() : '', statusStr, now, now]
+            [id, user_id, cleanName, Math.max(0, parseFloat(price) || 0), category.trim() || 'General', cleanSku || null, cleanLink, Math.max(0, parseInt(stock) || 100), cleanImage, imagesStr, description ? description.trim() : '', statusStr, now, now]
         );
 
         return await queryOne(`SELECT * FROM products WHERE id = ?`, [id]);
@@ -113,12 +115,12 @@ class Product {
         if (!product) return null;
 
         const name = data.name !== undefined ? data.name.trim() : product.name;
-        const price = data.price !== undefined ? parseFloat(data.price) : product.price;
+        const price = data.price !== undefined ? Math.max(0, parseFloat(data.price) || 0) : product.price;
         const category = data.category !== undefined ? data.category.trim() : product.category;
         const sku = data.sku !== undefined ? (data.sku ? data.sku.trim() : null) : product.sku;
-        const product_link = data.product_link !== undefined ? (data.product_link ? data.product_link.trim() : '') : (product.product_link || '');
-        const stock = data.stock !== undefined ? parseInt(data.stock) : product.stock;
-        const image = data.image !== undefined ? (data.image ? data.image.trim() : '') : (product.image || '');
+        const product_link = data.product_link !== undefined ? sanitizeAssetUrl(data.product_link) : (product.product_link || '');
+        const stock = data.stock !== undefined ? Math.max(0, parseInt(data.stock) || 0) : product.stock;
+        const image = data.image !== undefined ? sanitizeAssetUrl(data.image, { allowRelative: true }) : (product.image || '');
         const images = data.images !== undefined ? (typeof data.images === 'string' ? data.images : JSON.stringify(data.images)) : (product.images || '');
         const description = data.description !== undefined ? data.description.trim() : product.description;
         const status = data.status !== undefined ? data.status.trim().toLowerCase() : (product.status || 'active');

@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+
 // Confirms with Razorpay that a payment really happened and was for enough money.
 // The browser only tells us "a payment id"; anyone can send any id, so it is never trusted on its own.
 const apiBase = () => (process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com/v1').replace(/\/$/, '');
@@ -66,4 +68,16 @@ export const verifyPayment = async (paymentId, expectedRupees, expectedOrderId =
         return { ok: false, code: 'AMOUNT_TOO_LOW', detail: 'The amount paid does not cover this pack.' };
     }
     return { ok: true, amountPaise: Number(payment.amount) };
+};
+
+export const verifyRazorpaySignature = (orderId, paymentId, signature) => {
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret || !orderId || !paymentId || !signature) return false;
+    const expectedHex = crypto
+        .createHmac('sha256', secret)
+        .update(`${orderId}|${paymentId}`)
+        .digest('hex');
+    const a = Buffer.from(expectedHex, 'hex');
+    const b = Buffer.from(String(signature).trim(), 'hex');
+    return a.length === 32 && a.length === b.length && crypto.timingSafeEqual(a, b);
 };

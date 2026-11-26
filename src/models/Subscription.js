@@ -29,15 +29,10 @@ class Subscription {
       if (checkEmail && checkEmail.length > 0) validUserId = checkEmail[0].id;
     }
 
-    // Auto-compute expires_at for time plans (extends existing validity if still active)
+    // Auto-compute expires_at ONLY for explicit time plans (never from plan_name regex alone)
     let calculatedExpiresAt = expires_at;
-    if (!calculatedExpiresAt && (plan_type === 'time' || duration_months > 0 || /month|year/i.test(plan_name || ''))) {
-      let months = Number(duration_months || 0);
-      if (!months) {
-        if (/1\s*year/i.test(plan_name)) months = 12;
-        else if (/3\s*month/i.test(plan_name)) months = 3;
-        else months = 1;
-      }
+    if (!calculatedExpiresAt && (plan_type === 'time' || Number(duration_months || 0) > 0)) {
+      let months = Number(duration_months || 0) || 1;
       const now = new Date();
       let baseDate = now;
       if (validUserId) {
@@ -141,7 +136,7 @@ class Subscription {
         query(
         `SELECT * FROM subscriptions 
          WHERE user_id = ? AND (payment_status = 'completed' OR payment_status IS NULL)
-         AND (plan_type = 'time' OR plan_name LIKE '%Month%' OR plan_name LIKE '%Year%')
+         AND (plan_type = 'time' OR ((plan_type IS NULL OR plan_type = '') AND (plan_name LIKE '%Month%' OR plan_name LIKE '%Year%')))
          ORDER BY created_at DESC LIMIT 5`,
         [userId]
       )

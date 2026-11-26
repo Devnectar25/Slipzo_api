@@ -3,9 +3,15 @@ import Otp, { OTP_PURPOSES } from '../models/Otp.js';
 import { clearUserAuthCache } from '../middleware/auth.js';
 import { normalizePhone } from '../utils/phone.js';
 
-// No SMS provider is connected yet, so the code is sent back to the app and shown on screen ("demo code").
-// Once SMS sending is added, set OTP_DEMO_MODE=false so the code is never returned.
-const demoMode = () => process.env.OTP_DEMO_MODE !== 'false';
+import { isProduction } from '../config/security.js';
+
+// No SMS provider is connected yet, so in development the code can be returned as "demo_code".
+// In production, demo mode is FAIL-CLOSED: it stays off unless OTP_DEMO_MODE=true is explicitly set.
+const demoMode = () => {
+    if (process.env.OTP_DEMO_MODE === 'false') return false;
+    if (isProduction()) return process.env.OTP_DEMO_MODE === 'true';
+    return true;
+};
 const maskPhone = (p) => `+91 ${p.slice(0, 2)}******${p.slice(-2)}`;
 
 const PASSWORD_RULES = [/.{8,}/, /[A-Z]/, /[a-z]/, /[0-9]/, /[#?!@$%^&*+\-=_~`(){}[\]|\\:;"'<>,./]/];

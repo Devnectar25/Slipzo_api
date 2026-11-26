@@ -12,12 +12,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_DATA_DIR = path.join(__dirname, '../../data');
 
-export const SUPABASE_URL = process.env.SUPABASE_URL || 'https://apzabspkfpuszlduyoqv.supabase.co';
-export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFwemFic3BrZnB1c3psZHV5b3F2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwMTYzNTAsImV4cCI6MjEwNDU5MjM1MH0.T5RXzunQE2ih0yYXCqOAcb0QNXGJU2Py_gSiqYo4NMk';
-export const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFwemFic3BrZnB1c3psZHV5b3F2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTAxNjM1MCwiZXhwIjoyMTA0NTkyMzUwfQ._-AbXC08XTwVVif9BDVkNq2RDF1rULb-a_nMgLrFBQI';
+export const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+export const SUPABASE_ANON_KEY = (process.env.SUPABASE_ANON_KEY || '').trim();
+export const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
-// Initialize Supabase JS Client
-export const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY);
+const supabaseKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+if (!SUPABASE_URL || !supabaseKey) {
+    console.warn('⚠️ Supabase credentials are not configured in environment variables. Storage features require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+}
+
+// Initialize Supabase JS Client only when credentials are configured
+export const supabase = SUPABASE_URL && supabaseKey ? createClient(SUPABASE_URL, supabaseKey) : null;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
