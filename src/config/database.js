@@ -1561,6 +1561,9 @@ export const initDatabase = async () => {
     }
 };
 
+/** true when the live Postgres database is in use, false for the local SQLite file */
+export const isPostgres = () => isPg;
+
 export const query = async (sql, params = []) => {
     try {
         const normalized = normalizeSql(sql);

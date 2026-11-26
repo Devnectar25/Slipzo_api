@@ -1,65 +1,99 @@
 import express from 'express';
 import Subscription from '../models/Subscription.js';
 import jwt from 'jsonwebtoken';
-import { adminAuthMiddleware } from '../middleware/adminAuth.js';
-import { query, queryOne, supabase } from '../config/database.js';
+import { adminAuthMiddleware, adminCan, superAdminOnly, forgetSubAdmin, forgetSuperAdmin } from '../middleware/adminAuth.js';
+import SubAdmin, { ADMIN_PAGES } from '../models/SubAdmin.js';
+import AdminProfile from '../models/AdminProfile.js';
+import { query, queryOne, supabase, isPostgres } from '../config/database.js';
 import ContactSubmission from '../models/ContactSubmission.js';
 import MenuItem from '../models/MenuItem.js';
 import { getAdminPlans, createPlan, updatePlan, deletePlan } from '../controllers/planController.js';
 import Push from '../models/Push.js';
+import ErrorLog from '../models/ErrorLog.js';
 import { isPushConfigured } from '../utils/push.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'slipzo-secret-key-2024';
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@slipzo.com').toLowerCase().trim();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@12345';
-const ADMIN_SECURITY_CODE = process.env.ADMIN_SECURITY_CODE || 'SLIPZO_ADMIN_2026';
+const USERNAME_REGEX = /^[a-zA-Z0-9._-]{3,40}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Admin Login Endpoint
-router.post('/login', (req, res) => {
+const formatAdminResponse = (a) => ({
+    id: a.id || (a.isSuper ? 'super-admin' : null),
+    name: a.name || (a.isSuper ? 'Super Admin' : null),
+    email: a.email,
+    username: a.username || '',
+    phone: a.phone || '',
+    bio: a.bio || '',
+    role: a.isSuper ? 'Super Admin' : 'Sub Admin',
+    isSuper: Boolean(a.isSuper),
+    permissions: a.isSuper ? ADMIN_PAGES : (a.permissions || []),
+    loginTime: a.loginTime || null,
+    lastLoginAt: a.lastLoginAt || a.last_login_at || null,
+    updatedAt: a.updatedAt || a.updated_at || null
+});
+
+const issueAdminCookie = (res, payload) => {
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' });
+    res.cookie('slipzo_admin_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000
+    });
+    return token;
+};
+
+// Admin Login Endpoint (supports Email or Username for both Super Admin and Sub-admins)
+router.post('/login', async (req, res) => {
     try {
-        const { email, password, securityCode } = req.body;
+        const { email, password } = req.body;
 
         if (!email || !password) {
             return res.status(400).json({ detail: 'Email/Username and Password are required' });
         }
 
-        const inputEmail = email.toLowerCase().trim();
-        const inputPass = password.trim();
-        const inputSec = (securityCode || '').trim();
+        const inputLogin = String(email).toLowerCase().trim();
+        const inputPass = String(password).trim();
+        const loginTime = new Date().toISOString();
 
-        const isEmailValid = inputEmail === ADMIN_EMAIL || inputEmail === 'admin';
-        const isPassValid = inputPass === ADMIN_PASSWORD;
-        const isSecValid = !ADMIN_SECURITY_CODE || inputSec === ADMIN_SECURITY_CODE;
-
-        if (!isEmailValid || !isPassValid || !isSecValid) {
-            return res.status(401).json({ detail: 'Invalid Admin credentials or security code' });
+        const isSuperTarget = await AdminProfile.matchesSuperLogin(inputLogin);
+        if (isSuperTarget) {
+            const superAdmin = await AdminProfile.checkSuperLogin(inputLogin, inputPass);
+            if (!superAdmin) {
+                return res.status(401).json({ detail: 'Invalid Admin credentials' });
+            }
+            const token = issueAdminCookie(res, {
+                isAdmin: true,
+                email: superAdmin.email,
+                role: 'Super Admin',
+                loginTime
+            });
+            return res.json({
+                detail: 'Admin login successful',
+                token,
+                admin: formatAdminResponse({ ...superAdmin, isSuper: true, loginTime })
+            });
         }
 
-        const adminPayload = {
+        const sub = await SubAdmin.checkLogin(inputLogin, inputPass).catch(() => null);
+        if (!sub) {
+            return res.status(401).json({ detail: 'Invalid Admin credentials' });
+        }
+
+        const subToken = issueAdminCookie(res, {
             isAdmin: true,
-            email: ADMIN_EMAIL,
-            role: 'Super Admin',
-            loginTime: new Date().toISOString()
-        };
-
-        const token = jwt.sign(adminPayload, JWT_SECRET, { expiresIn: '1d' });
-
-        res.cookie('slipzo_admin_token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            maxAge: 24 * 60 * 60 * 1000
+            subAdminId: sub.id,
+            email: sub.email,
+            role: 'Sub Admin',
+            loginTime
         });
 
         return res.json({
             detail: 'Admin login successful',
-            token,
-            admin: {
-                email: ADMIN_EMAIL,
-                role: 'Super Admin'
-            }
+            token: subToken,
+            admin: formatAdminResponse({ ...sub, isSuper: false, loginTime })
         });
     } catch (err) {
         console.error('❌ Admin login error:', err);
@@ -70,12 +104,253 @@ router.post('/login', (req, res) => {
 // Get Current Admin Session
 router.get('/me', adminAuthMiddleware, (req, res) => {
     return res.json({
-        admin: {
-            email: req.admin.email,
-            role: req.admin.role || 'Super Admin',
-            loginTime: req.admin.loginTime
-        }
+        admin: formatAdminResponse(req.admin)
     });
+});
+
+// Update Current Admin Profile (name, username, email, phone, bio)
+router.put('/profile', adminAuthMiddleware, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const name = String(body.name || '').trim();
+        const email = String(body.email || '').trim().toLowerCase();
+        const usernameRaw = String(body.username || '').trim().toLowerCase();
+        const phone = String(body.phone || '').trim();
+        const bio = String(body.bio || '').trim();
+
+        if (name.length < 2 || name.length > 80) {
+            return res.status(400).json({ detail: 'Display name must be between 2 and 80 characters.' });
+        }
+        if (!EMAIL_REGEX.test(email) || email.length > 120) {
+            return res.status(400).json({ detail: 'Please enter a valid email address.' });
+        }
+        if (usernameRaw && !USERNAME_REGEX.test(usernameRaw)) {
+            return res.status(400).json({ detail: 'Username must be 3–40 characters (letters, numbers, ".", "_", or "-").' });
+        }
+        if (phone.length > 24) {
+            return res.status(400).json({ detail: 'Phone number is too long (max 24 characters).' });
+        }
+        if (bio.length > 200) {
+            return res.status(400).json({ detail: 'Role description / bio must be 200 characters or fewer.' });
+        }
+
+        if (req.admin.isSuper) {
+            const existingEmail = await SubAdmin.findRowByEmail(email);
+            if (existingEmail) {
+                return res.status(409).json({ detail: 'This email is already used by a sub-admin account.' });
+            }
+            if (usernameRaw) {
+                const existingUser = await SubAdmin.findRowByUsername(usernameRaw);
+                if (existingUser) {
+                    return res.status(409).json({ detail: 'This username is already used by a sub-admin account.' });
+                }
+            }
+
+            const updated = await AdminProfile.updateSuperProfile({
+                name,
+                email,
+                username: usernameRaw,
+                phone,
+                bio
+            });
+            forgetSuperAdmin();
+
+            const token = issueAdminCookie(res, {
+                isAdmin: true,
+                email: updated.email,
+                role: 'Super Admin',
+                loginTime: req.admin.loginTime || new Date().toISOString()
+            });
+
+            return res.json({
+                detail: 'Profile updated successfully.',
+                token,
+                admin: formatAdminResponse({ ...updated, isSuper: true, loginTime: req.admin.loginTime })
+            });
+        }
+
+        // Sub-admin editing their own profile
+        const superAcc = await AdminProfile.getSuperAdmin();
+        if (superAcc) {
+            if (email === superAcc.email.toLowerCase() || (superAcc.username && email === superAcc.username.toLowerCase())) {
+                return res.status(409).json({ detail: 'This email belongs to the Super Admin account.' });
+            }
+            if (usernameRaw && (usernameRaw === superAcc.email.toLowerCase() || (superAcc.username && usernameRaw === superAcc.username.toLowerCase()))) {
+                return res.status(409).json({ detail: 'This username belongs to the Super Admin account.' });
+            }
+        }
+
+        const otherByEmail = await SubAdmin.findRowByEmail(email);
+        if (otherByEmail && String(otherByEmail.id) !== String(req.admin.id)) {
+            return res.status(409).json({ detail: 'Another admin account already uses this email.' });
+        }
+        if (usernameRaw) {
+            const otherByUser = await SubAdmin.findRowByUsername(usernameRaw);
+            if (otherByUser && String(otherByUser.id) !== String(req.admin.id)) {
+                return res.status(409).json({ detail: 'Another admin account already uses this username.' });
+            }
+        }
+
+        const updated = await SubAdmin.update(req.admin.id, {
+            name,
+            email,
+            username: usernameRaw,
+            phone,
+            bio
+        });
+        forgetSubAdmin(req.admin.id);
+
+        const token = issueAdminCookie(res, {
+            isAdmin: true,
+            subAdminId: updated.id,
+            email: updated.email,
+            role: 'Sub Admin',
+            loginTime: req.admin.loginTime || new Date().toISOString()
+        });
+
+        return res.json({
+            detail: 'Profile updated successfully.',
+            token,
+            admin: formatAdminResponse({ ...updated, isSuper: false, loginTime: req.admin.loginTime })
+        });
+    } catch (err) {
+        if (err?.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ detail: 'Email or username is already in use.' });
+        }
+        console.error('❌ Admin profile update error:', err);
+        return res.status(500).json({ detail: 'Could not update profile details.' });
+    }
+});
+
+// Change Current Admin Password
+router.put('/profile/password', adminAuthMiddleware, async (req, res) => {
+    try {
+        const currentPassword = String(req.body?.currentPassword || '');
+        const newPassword = String(req.body?.newPassword || '');
+        const confirmPassword = req.body?.confirmPassword !== undefined ? String(req.body.confirmPassword) : undefined;
+
+        if (!currentPassword) {
+            return res.status(400).json({ detail: 'Please enter your current password.' });
+        }
+        if (newPassword.length < 6 || newPassword.length > 100) {
+            return res.status(400).json({ detail: 'New password must be between 6 and 100 characters.' });
+        }
+        if (confirmPassword !== undefined && confirmPassword !== newPassword) {
+            return res.status(400).json({ detail: 'New password and confirmation do not match.' });
+        }
+        if (newPassword === currentPassword) {
+            return res.status(400).json({ detail: 'New password must be different from your current password.' });
+        }
+
+        if (req.admin.isSuper) {
+            const valid = await AdminProfile.verifySuperPassword(currentPassword);
+            if (!valid) {
+                return res.status(400).json({ detail: 'Current password is incorrect.' });
+            }
+            await AdminProfile.changeSuperPassword(newPassword);
+            forgetSuperAdmin();
+            return res.json({ detail: 'Password changed successfully.' });
+        }
+
+        const valid = await SubAdmin.verifyPassword(req.admin.id, currentPassword);
+        if (!valid) {
+            return res.status(400).json({ detail: 'Current password is incorrect.' });
+        }
+        await SubAdmin.update(req.admin.id, { password: newPassword });
+        forgetSubAdmin(req.admin.id);
+        return res.json({ detail: 'Password changed successfully.' });
+    } catch (err) {
+        console.error('❌ Admin password change error:', err);
+        return res.status(500).json({ detail: 'Could not change password.' });
+    }
+});
+
+// ---------- Sub-admins: made and managed by the super admin only ----------
+const SUB_ADMIN_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const subAdminInput = (body, { creating }, superAcc = null) => {
+    const out = {};
+    if (creating || body.name !== undefined) {
+        const name = String(body.name || '').trim();
+        if (name.length < 2 || name.length > 80) return { error: 'Please enter a name (2 to 80 letters).' };
+        out.name = name;
+    }
+    if (creating) {
+        const email = String(body.email || '').trim().toLowerCase();
+        if (!SUB_ADMIN_EMAIL.test(email) || email.length > 120) return { error: 'Please enter a valid email address.' };
+        const superEmail = (superAcc?.email || ADMIN_EMAIL).toLowerCase();
+        const superUsername = (superAcc?.username || 'admin').toLowerCase();
+        if (email === superEmail || (superUsername && email === superUsername)) {
+            return { error: 'That is the super admin email.' };
+        }
+        out.email = email;
+    }
+    if (creating || (body.password !== undefined && body.password !== '')) {
+        const password = String(body.password || '');
+        if (password.length < 8 || password.length > 100 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+            return { error: 'The password needs at least 8 characters, with letters and numbers.' };
+        }
+        out.password = password;
+    }
+    if (body.permissions !== undefined) {
+        if (!Array.isArray(body.permissions)) return { error: 'Choose the pages this admin may open.' };
+        out.permissions = body.permissions;
+    } else if (creating) {
+        out.permissions = [];
+    }
+    if (body.active !== undefined) out.active = Boolean(body.active);
+    return { value: out };
+};
+
+router.get('/sub-admins', adminAuthMiddleware, superAdminOnly, async (req, res) => {
+    try {
+        return res.json({ subAdmins: await SubAdmin.list(), pages: ADMIN_PAGES });
+    } catch (err) {
+        console.error('❌ Sub-admin list error:', err);
+        return res.status(500).json({ detail: 'Could not load the sub-admins.' });
+    }
+});
+
+router.post('/sub-admins', adminAuthMiddleware, superAdminOnly, async (req, res) => {
+    try {
+        const superAcc = await AdminProfile.getSuperAdmin();
+        const input = subAdminInput(req.body || {}, { creating: true }, superAcc);
+        if (input.error) return res.status(400).json({ detail: input.error });
+        if (await SubAdmin.findRowByEmail(input.value.email)) {
+            return res.status(409).json({ detail: 'A sub-admin with this email already exists.' });
+        }
+        const created = await SubAdmin.create({ ...input.value, createdBy: req.admin.email });
+        return res.status(201).json({ subAdmin: created });
+    } catch (err) {
+        if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ detail: 'A sub-admin with this email already exists.' });
+        console.error('❌ Sub-admin create error:', err);
+        return res.status(500).json({ detail: 'Could not create the sub-admin.' });
+    }
+});
+
+router.put('/sub-admins/:id', adminAuthMiddleware, superAdminOnly, async (req, res) => {
+    try {
+        if (!(await SubAdmin.findById(req.params.id))) return res.status(404).json({ detail: 'Sub-admin not found.' });
+        const input = subAdminInput(req.body || {}, { creating: false });
+        if (input.error) return res.status(400).json({ detail: input.error });
+        const updated = await SubAdmin.update(req.params.id, input.value);
+        forgetSubAdmin(req.params.id);
+        return res.json({ subAdmin: updated });
+    } catch (err) {
+        console.error('❌ Sub-admin update error:', err);
+        return res.status(500).json({ detail: 'Could not update the sub-admin.' });
+    }
+});
+
+router.delete('/sub-admins/:id', adminAuthMiddleware, superAdminOnly, async (req, res) => {
+    try {
+        if (!(await SubAdmin.findById(req.params.id))) return res.status(404).json({ detail: 'Sub-admin not found.' });
+        await SubAdmin.remove(req.params.id);
+        forgetSubAdmin(req.params.id);
+        return res.json({ detail: 'Sub-admin removed.' });
+    } catch (err) {
+        console.error('❌ Sub-admin delete error:', err);
+        return res.status(500).json({ detail: 'Could not remove the sub-admin.' });
+    }
 });
 
 // Admin Logout
@@ -85,7 +360,7 @@ router.post('/logout', (req, res) => {
 });
 
 // System Analytics & Stats
-router.get('/stats', adminAuthMiddleware, async (req, res) => {
+router.get('/stats', adminAuthMiddleware, adminCan('overview'), async (req, res) => {
     try {
         const usersCount = await queryOne('SELECT COUNT(*) as count FROM users');
         const shopsCount = await queryOne('SELECT COUNT(*) as count FROM shops');
@@ -125,8 +400,133 @@ router.get('/stats', adminAuthMiddleware, async (req, res) => {
     }
 });
 
+// Platform analytics for the overview page: growth, usage and plan revenue over a chosen period.
+// Days are counted in Indian time. Admin print grants (amount 0) never count as revenue.
+router.get('/analytics', adminAuthMiddleware, adminCan('overview'), async (req, res) => {
+    try {
+        const days = [7, 30, 90, 365].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+        const monthly = days > 90;
+        const pg = isPostgres();
+        const dayOf = (col) => pg
+            ? `to_char((${col} AT TIME ZONE 'Asia/Kolkata'), '${monthly ? 'YYYY-MM' : 'YYYY-MM-DD'}')`
+            : `strftime('${monthly ? '%Y-%m' : '%Y-%m-%d'}', ${col}, '+330 minutes')`;
+        const istDate = (d) => new Date(d.getTime() + 330 * 60000).toISOString().slice(0, 10);
+        const now = new Date();
+        const start = new Date(now.getTime() - (days - 1) * 86400000);
+        const prevStart = new Date(start.getTime() - days * 86400000);
+        // compared as text on SQLite ('YYYY-MM-DD ...'), as a timestamp on Postgres; a day early keeps the time-zone edge inside, the buckets trim it
+        const since = istDate(new Date(prevStart.getTime() - 86400000));
+        const paid = `(payment_status = 'completed' OR payment_status IS NULL) AND amount > 0`;
+        const safe = (p) => p.catch((err) => { console.error('analytics query failed:', err.message); return []; });
+
+        const [userRows, billRows, revRows, prevBillRow, prevUserRow, prevRevRow, totals, planRows, modeRows, topRows, activeRow, prevActiveRow, funnelShops, funnelBillers, funnelPayers, grantRow] = await Promise.all([
+            safe(query(`SELECT ${dayOf('created_at')} AS d, COUNT(*) AS n FROM users WHERE created_at >= ? GROUP BY d`, [since])),
+            safe(query(`SELECT ${dayOf('created_at')} AS d, COUNT(*) AS n, COALESCE(SUM(total), 0) AS amt FROM bills WHERE created_at >= ? GROUP BY d`, [since])),
+            safe(query(`SELECT ${dayOf('created_at')} AS d, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt FROM subscriptions WHERE ${paid} AND created_at >= ? GROUP BY d`, [since])),
+            safe(queryOne(`SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS amt FROM bills WHERE created_at >= ? AND created_at < ?`, [istDate(prevStart), istDate(start)]).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(*) AS n FROM users WHERE created_at >= ? AND created_at < ?`, [istDate(prevStart), istDate(start)]).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt FROM subscriptions WHERE ${paid} AND created_at >= ? AND created_at < ?`, [istDate(prevStart), istDate(start)]).then((r) => [r])),
+            safe(queryOne(`SELECT COALESCE(SUM(amount), 0) AS revenue, COUNT(*) AS purchases, COUNT(DISTINCT user_id) AS payers FROM subscriptions WHERE ${paid}`).then((r) => [r])),
+            safe(query(`SELECT COALESCE(plan_name, 'Plan') AS name, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt FROM subscriptions WHERE ${paid} AND created_at >= ? GROUP BY COALESCE(plan_name, 'Plan') ORDER BY amt DESC`, [istDate(start)])),
+            safe(query(`SELECT COALESCE(payment_mode, 'Cash') AS name, COUNT(*) AS n, COALESCE(SUM(total), 0) AS amt FROM bills WHERE created_at >= ? GROUP BY COALESCE(payment_mode, 'Cash') ORDER BY n DESC`, [istDate(start)])),
+            safe(query(`SELECT b.user_id, MAX(COALESCE(s.name, b.shop_name)) AS name, COUNT(*) AS n, COALESCE(SUM(b.total), 0) AS amt FROM bills b LEFT JOIN shops s ON s.user_id = b.user_id WHERE b.created_at >= ? GROUP BY b.user_id ORDER BY n DESC LIMIT 6`, [istDate(start)])),
+            safe(queryOne(`SELECT COUNT(DISTINCT user_id) AS n FROM bills WHERE created_at >= ?`, [istDate(start)]).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(DISTINCT user_id) AS n FROM bills WHERE created_at >= ? AND created_at < ?`, [istDate(prevStart), istDate(start)]).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(DISTINCT user_id) AS n FROM shops`).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(DISTINCT user_id) AS n FROM bills`).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(DISTINCT user_id) AS n FROM subscriptions WHERE ${paid}`).then((r) => [r])),
+            safe(queryOne(`SELECT COUNT(*) AS n, COALESCE(SUM(prints_count), 0) AS prints FROM subscriptions WHERE amount = 0 AND created_at >= ?`, [istDate(start)]).then((r) => [r]))
+        ]);
+        const num = (v) => Number(v || 0);
+        const one = (rows) => (rows && rows[0]) || {};
+        const usersTotal = num(one(await safe(queryOne('SELECT COUNT(*) AS n FROM users').then((r) => [r]))).n);
+
+        // one bucket per day (or month), oldest first, with zeros where nothing happened
+        const keys = [];
+        if (monthly) {
+            const d = new Date(istDate(now) + 'T00:00:00Z');
+            for (let i = 11; i >= 0; i--) keys.push(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+        } else {
+            for (let i = 0; i < days; i++) keys.push(istDate(new Date(start.getTime() + i * 86400000)));
+        }
+        const map = (rows) => Object.fromEntries((rows || []).map((r) => [String(r.d), r]));
+        const u = map(userRows), b = map(billRows), r = map(revRows);
+        const series = keys.map((k) => ({
+            date: k,
+            newUsers: num(u[k]?.n),
+            bills: num(b[k]?.n),
+            billValue: Math.round(num(b[k]?.amt)),
+            revenue: Math.round(num(r[k]?.amt)),
+            purchases: num(r[k]?.n)
+        }));
+        const sum = (f) => series.reduce((a, x) => a + x[f], 0);
+        const prevBill = one(prevBillRow), prevRev = one(prevRevRow), tot = one(totals);
+
+        return res.json({
+            days,
+            bucket: monthly ? 'month' : 'day',
+            series,
+            current: {
+                revenue: sum('revenue'), purchases: sum('purchases'), newUsers: sum('newUsers'),
+                bills: sum('bills'), billValue: sum('billValue'), activeShops: num(one(activeRow).n)
+            },
+            previous: {
+                revenue: Math.round(num(prevRev.amt)), purchases: num(prevRev.n), newUsers: num(one(prevUserRow).n),
+                bills: num(prevBill.n), billValue: Math.round(num(prevBill.amt)), activeShops: num(one(prevActiveRow).n)
+            },
+            lifetime: {
+                revenue: Math.round(num(tot.revenue)), purchases: num(tot.purchases), payers: num(tot.payers), users: usersTotal
+            },
+            funnel: {
+                registered: usersTotal,
+                shopSetup: num(one(funnelShops).n),
+                madeBill: num(one(funnelBillers).n),
+                paid: num(one(funnelPayers).n)
+            },
+            plans: (planRows || []).map((x) => ({ name: x.name, count: num(x.n), revenue: Math.round(num(x.amt)) })),
+            paymentModes: (modeRows || []).map((x) => ({ name: x.name, count: num(x.n), amount: Math.round(num(x.amt)) })),
+            topShops: (topRows || []).map((x) => ({ id: x.user_id, name: x.name || 'Shop', bills: num(x.n), amount: Math.round(num(x.amt)) })),
+            grants: { count: num(one(grantRow).n), prints: num(one(grantRow).prints) }
+        });
+    } catch (err) {
+        console.error('❌ Error building admin analytics:', err);
+        return res.status(500).json({ detail: 'Failed to load analytics' });
+    }
+});
+
+// ---------- Error Monitor: errors from the web app, the Android app and the server, one row per distinct error ----------
+router.get('/errors', adminAuthMiddleware, adminCan('errors'), async (req, res, next) => {
+    try {
+        const { status = 'open', source = 'all', search = '', sort = 'recent' } = req.query;
+        const [errors, summary] = await Promise.all([ErrorLog.list({ status, source, search, sort }), ErrorLog.summary()]);
+        res.json({ errors, summary });
+    } catch (err) { next(err); }
+});
+
+router.put('/errors/:id', adminAuthMiddleware, adminCan('errors'), async (req, res, next) => {
+    try {
+        const status = req.body?.status;
+        if (!['open', 'resolved'].includes(status)) return res.status(400).json({ detail: 'Status must be open or resolved.' });
+        if (!(await ErrorLog.setStatus(req.params.id, status))) return res.status(404).json({ detail: 'Error not found.' });
+        res.json({ success: true });
+    } catch (err) { next(err); }
+});
+
+router.delete('/errors/resolved', adminAuthMiddleware, adminCan('errors'), async (req, res, next) => {
+    try {
+        res.json({ success: true, removed: await ErrorLog.removeResolved() });
+    } catch (err) { next(err); }
+});
+
+router.delete('/errors/:id', adminAuthMiddleware, adminCan('errors'), async (req, res, next) => {
+    try {
+        if (!(await ErrorLog.remove(req.params.id))) return res.status(404).json({ detail: 'Error not found.' });
+        res.json({ success: true });
+    } catch (err) { next(err); }
+});
+
 // User & Shop List
-router.get('/users', adminAuthMiddleware, async (req, res) => {
+router.get('/users', adminAuthMiddleware, adminCan('users'), async (req, res) => {
     try {
         const search = req.query.search ? `%${req.query.search.trim()}%` : null;
 
@@ -175,7 +575,7 @@ router.get('/users', adminAuthMiddleware, async (req, res) => {
 });
 
 // System Bills Log
-router.get('/bills', adminAuthMiddleware, async (req, res) => {
+router.get('/bills', adminAuthMiddleware, adminCan('bills'), async (req, res) => {
     try {
         const sql = `
             SELECT 
@@ -202,7 +602,7 @@ router.get('/bills', adminAuthMiddleware, async (req, res) => {
 });
 
 // Support Contact Submissions Log
-router.get('/contacts', adminAuthMiddleware, async (req, res) => {
+router.get('/contacts', adminAuthMiddleware, adminCan('contacts'), async (req, res) => {
     try {
         const submissions = await ContactSubmission.findAll();
         return res.json({ contacts: submissions || [] });
@@ -213,7 +613,7 @@ router.get('/contacts', adminAuthMiddleware, async (req, res) => {
 });
 
 // System Templates Management
-router.get('/templates', adminAuthMiddleware, async (req, res) => {
+router.get('/templates', adminAuthMiddleware, adminCan('templates'), async (req, res) => {
     try {
         const sql = `
             SELECT 
@@ -239,7 +639,7 @@ router.get('/templates', adminAuthMiddleware, async (req, res) => {
 });
 
 // Create New Admin Template
-router.post('/templates', adminAuthMiddleware, async (req, res) => {
+router.post('/templates', adminAuthMiddleware, adminCan('templates'), async (req, res) => {
     try {
         const { name, category, width } = req.body;
         if (!name || !name.trim()) {
@@ -268,7 +668,7 @@ router.post('/templates', adminAuthMiddleware, async (req, res) => {
 });
 
 // Update Admin Template
-router.put('/templates/:id', adminAuthMiddleware, async (req, res) => {
+router.put('/templates/:id', adminAuthMiddleware, adminCan('templates'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name, category, width } = req.body;
@@ -291,7 +691,7 @@ router.put('/templates/:id', adminAuthMiddleware, async (req, res) => {
 });
 
 // Delete Admin Template
-router.delete('/templates/:id', adminAuthMiddleware, async (req, res) => {
+router.delete('/templates/:id', adminAuthMiddleware, adminCan('templates'), async (req, res) => {
     try {
         const { id } = req.params;
         await query(`DELETE FROM templates WHERE id = ?`, [id]);
@@ -303,7 +703,7 @@ router.delete('/templates/:id', adminAuthMiddleware, async (req, res) => {
 });
 
 // System Product Catalog Management
-router.get('/products', adminAuthMiddleware, async (req, res) => {
+router.get('/products', adminAuthMiddleware, adminCan('products'), async (req, res) => {
     try {
         const sql = `
             SELECT 
@@ -340,7 +740,7 @@ router.get('/products', adminAuthMiddleware, async (req, res) => {
 });
 
 // Create New Admin Product with Photos
-router.post('/products', adminAuthMiddleware, async (req, res) => {
+router.post('/products', adminAuthMiddleware, adminCan('products'), async (req, res) => {
     try {
         const { name, category, price, product_link, description, images, image, status } = req.body;
         if (!name || !name.trim()) {
@@ -501,7 +901,7 @@ router.post('/products', adminAuthMiddleware, async (req, res) => {
 });
 
 // Update Admin Product (General or Status)
-router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
+router.put('/products/:id', adminAuthMiddleware, adminCan('products'), async (req, res) => {
     try {
         const { id } = req.params;
         const { status, name, price, category, product_link, description, tax_rate, stock, image } = req.body;
@@ -539,7 +939,7 @@ router.put('/products/:id', adminAuthMiddleware, async (req, res) => {
 });
 
 // Update Admin Product Status (Active / Inactive)
-router.put('/products/:id/status', adminAuthMiddleware, async (req, res) => {
+router.put('/products/:id/status', adminAuthMiddleware, adminCan('products'), async (req, res) => {
     try {
         const { id } = req.params;
         const { status, name } = req.body;
@@ -568,7 +968,7 @@ router.put('/products/:id/status', adminAuthMiddleware, async (req, res) => {
 });
 
 // Delete Admin Product
-router.delete('/products/:id', adminAuthMiddleware, async (req, res) => {
+router.delete('/products/:id', adminAuthMiddleware, adminCan('products'), async (req, res) => {
     try {
         const { id } = req.params;
         await query(`DELETE FROM products WHERE id = ?`, [id]);
@@ -580,7 +980,7 @@ router.delete('/products/:id', adminAuthMiddleware, async (req, res) => {
 });
 
 // Plan Buyer Users & Active Subscriptions
-router.get('/plan-buyers', adminAuthMiddleware, async (req, res) => {
+router.get('/plan-buyers', adminAuthMiddleware, adminCan('plan_buyers'), async (req, res) => {
     try {
         const subSql = `
             SELECT 
@@ -612,19 +1012,19 @@ router.get('/plan-buyers', adminAuthMiddleware, async (req, res) => {
 
 // Plans Management (Create & Edit all Time-based and Print-based plans)
 // ---------- Push notifications to the app (announcements, discount offers, plan reminders) ----------
-router.get('/push/status', adminAuthMiddleware, async (req, res, next) => {
+router.get('/push/status', adminAuthMiddleware, adminCan('notifications'), async (req, res, next) => {
     try {
         res.json({ configured: isPushConfigured(), ...(await Push.deviceCount()) });
     } catch (err) { next(err); }
 });
 
-router.get('/push/messages', adminAuthMiddleware, async (req, res, next) => {
+router.get('/push/messages', adminAuthMiddleware, adminCan('notifications'), async (req, res, next) => {
     try {
         res.json(await Push.listMessages(Number(req.query.limit) || 50));
     } catch (err) { next(err); }
 });
 
-router.post('/push/send', adminAuthMiddleware, async (req, res, next) => {
+router.post('/push/send', adminAuthMiddleware, adminCan('notifications'), async (req, res, next) => {
     try {
         const title = String(req.body?.title || '').trim();
         const body = String(req.body?.body || '').trim();
@@ -652,13 +1052,13 @@ router.post('/push/send', adminAuthMiddleware, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-router.get('/plans', adminAuthMiddleware, getAdminPlans);
-router.post('/plans', adminAuthMiddleware, createPlan);
-router.put('/plans/:id', adminAuthMiddleware, updatePlan);
-router.delete('/plans/:id', adminAuthMiddleware, deletePlan);
+router.get('/plans', adminAuthMiddleware, adminCan('plans'), getAdminPlans);
+router.post('/plans', adminAuthMiddleware, adminCan('plans'), createPlan);
+router.put('/plans/:id', adminAuthMiddleware, adminCan('plans'), updatePlan);
+router.delete('/plans/:id', adminAuthMiddleware, adminCan('plans'), deletePlan);
 
 // Grant Print Credits to User Shop
-router.post('/users/:id/grant-prints', adminAuthMiddleware, async (req, res) => {
+router.post('/users/:id/grant-prints', adminAuthMiddleware, adminCan('grant_credits'), async (req, res) => {
     try {
         const { printsToGrant } = req.body;
         const userId = req.params.id;
@@ -703,7 +1103,7 @@ router.post('/users/:id/grant-prints', adminAuthMiddleware, async (req, res) => 
 // ==========================================
 
 // Get All Master Menu Items (with search, category, pagination)
-router.get('/menu', adminAuthMiddleware, async (req, res) => {
+router.get('/menu', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
     try {
         const { search = '', category = 'all', page = 1, limit = 50 } = req.query;
         const result = await MenuItem.findAllAdmin({ search, category, page, limit });
@@ -751,7 +1151,7 @@ async function processMasterItemImage(rawImg, name) {
 }
 
 // Create New Master Menu Item
-router.post('/menu', adminAuthMiddleware, async (req, res) => {
+router.post('/menu', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
     try {
         const { name, price, category, image_url, description, is_available, barcode, barcode_type } = req.body;
 
@@ -785,7 +1185,7 @@ router.post('/menu', adminAuthMiddleware, async (req, res) => {
 });
 
 // Update Master Menu Item
-router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
+router.put('/menu/:id', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name, price, category, image_url, description, is_available, barcode, barcode_type } = req.body;
@@ -820,7 +1220,7 @@ router.put('/menu/:id', adminAuthMiddleware, async (req, res) => {
 });
 
 // Toggle Master Menu Item Status (Active / Inactive)
-router.put('/menu/:id/status', adminAuthMiddleware, async (req, res) => {
+router.put('/menu/:id/status', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
     try {
         const { id } = req.params;
         const { is_available } = req.body;
@@ -842,7 +1242,7 @@ router.put('/menu/:id/status', adminAuthMiddleware, async (req, res) => {
 });
 
 // Delete / Safe Deactivate Master Menu Item
-router.delete('/menu/:id', adminAuthMiddleware, async (req, res) => {
+router.delete('/menu/:id', adminAuthMiddleware, adminCan('menu'), async (req, res) => {
     try {
         const { id } = req.params;
         const result = await MenuItem.deleteMaster(id);
@@ -852,10 +1252,11 @@ router.delete('/menu/:id', adminAuthMiddleware, async (req, res) => {
         }
 
         return res.json({
-            detail: result.softDeleted 
-                ? 'Item is currently in user menus, so it was deactivated to protect user billing data.'
+            detail: result.softDeleted
+                ? `Deleted from the catalog. ${result.shopsUsing} shop${result.shopsUsing === 1 ? '' : 's'} had already added it; their past bills keep it.`
                 : 'Master menu item deleted successfully.',
-            softDeleted: result.softDeleted
+            softDeleted: result.softDeleted,
+            shopsUsing: result.shopsUsing || 0
         });
     } catch (err) {
         console.error('❌ Error deleting master menu item:', err);

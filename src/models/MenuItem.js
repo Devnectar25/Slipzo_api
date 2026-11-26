@@ -1,5 +1,20 @@
 import { v4 as uuidv4 } from 'uuid';
-import { query, queryOne, insert, update } from '../config/database.js';
+import { query, queryOne, insert, update, isPostgres } from '../config/database.js';
+
+// Deleted master items keep their row (shops that already added one still read its name and price), marked with
+// deleted_at so they leave the admin catalog and can never be added again.
+let deletedColumn = null;
+const ensureDeletedColumn = () => {
+    if (!deletedColumn) {
+        deletedColumn = (isPostgres()
+            ? query('ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS deleted_at TEXT')
+            : query('ALTER TABLE menu_items ADD COLUMN deleted_at TEXT').catch((err) => {
+                if (!/duplicate column/i.test(err?.message || '')) throw err;
+            })
+        ).catch((err) => { deletedColumn = null; throw err; });
+    }
+    return deletedColumn;
+};
 
 export default class MenuItem {
     constructor(data) {
@@ -115,7 +130,8 @@ export default class MenuItem {
      * Admin view: Fetch all master menu items (including inactive)
      */
     static async findAllAdmin({ search = '', category = 'all', page = 1, limit = 100 } = {}) {
-        let whereClause = ` WHERE 1=1`;
+        await ensureDeletedColumn();
+        let whereClause = ` WHERE deleted_at IS NULL`;
         const params = [];
 
         if (search && search.trim()) {
@@ -154,7 +170,8 @@ export default class MenuItem {
     static async findByBarcode(barcode) {
         if (!barcode || !String(barcode).trim()) return null;
         const clean = String(barcode).trim();
-        const sql = `SELECT * FROM menu_items WHERE LOWER(barcode) = LOWER(?)`;
+        await ensureDeletedColumn();
+        const sql = `SELECT * FROM menu_items WHERE LOWER(barcode) = LOWER(?) AND deleted_at IS NULL`;
         const data = await queryOne(sql, [clean]);
         return data ? new MenuItem(data) : null;
     }
@@ -263,9 +280,12 @@ export default class MenuItem {
         const refCount = refCheck ? (refCheck.cnt || refCheck.count || 0) : 0;
 
         if (Number(refCount) > 0) {
-            // Soft delete / inactivate to preserve user menus
-            await update('menu_items', { is_available: false, updated_at: new Date().toISOString() }, 'id = ?', [id]);
-            return { deleted: true, softDeleted: true, message: 'Item is assigned in user menus; marked inactive to protect user menus.' };
+            // Shops already use it: hide it everywhere new (admin list, catalog, barcode lookup) but keep the row
+            await ensureDeletedColumn();
+            const now = new Date().toISOString();
+            const res = await query('UPDATE menu_items SET is_available = ?, deleted_at = ?, updated_at = ? WHERE id = ?', [isPostgres() ? false : 0, now, now, id]);
+            const changed = res ? (res.affectedRows || res.changes || res.rowCount || 0) : 0;
+            return { deleted: changed > 0, softDeleted: true, shopsUsing: Number(refCount) };
         }
 
         const result = await query('DELETE FROM menu_items WHERE id = ?', [id]);
