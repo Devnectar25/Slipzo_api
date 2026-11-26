@@ -23,6 +23,11 @@ import notificationRoutes from './src/routes/notificationRoutes.js';
 import { startPlanReminderTimer } from './src/services/planReminders.js';
 import { getPublicPlans } from './src/controllers/planController.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
+import errorRoutes from './src/routes/errorRoutes.js';
+import { installServerErrorMonitor } from './src/services/errorMonitor.js';
+
+// errors the server logs are kept for the admin panel's Error Monitor (grouped, with a count)
+installServerErrorMonitor();
 
 dotenv.config();
 
@@ -122,6 +127,7 @@ app.use('/api/restaurant', restaurantRoutes);
 app.use('/api/tables', restaurantRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/errors', errorRoutes);
 app.get('/api/plans', getPublicPlans);
 
 // Root & Health check endpoints

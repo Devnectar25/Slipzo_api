@@ -2,7 +2,7 @@ import express from 'express';
 import { createSubscription, createPaymentOrder, getUserSubscriptions, getAllSubscriptions, claimOnboardingReward, consumePrint } from '../controllers/subscriptionController.js';
 import { getPublicPlans } from '../controllers/planController.js';
 import { optionalAuth, authMiddleware } from '../middleware/auth.js';
-import { adminAuthMiddleware } from '../middleware/adminAuth.js';
+import { adminAuthMiddleware, adminCan } from '../middleware/adminAuth.js';
 
 const router = express.Router();
 
@@ -26,6 +26,6 @@ router.post('/', authMiddleware, createSubscription);
 router.get('/my', authMiddleware, getUserSubscriptions);
 
 // Admin view of all subscriptions
-router.get('/all', adminAuthMiddleware, getAllSubscriptions);
+router.get('/all', adminAuthMiddleware, adminCan('plan_buyers'), getAllSubscriptions);
 
 export default router;
